@@ -23,6 +23,7 @@ class RequirementAgentExecutor(AgentExecutor):
         - After reviewing the initial search results, refine your search terms to fill in any gaps or address specific project aspects.
         - Perform additional "Doc_search" iterations with these new terms.
         - Continue this iterative process of refining and searching until you have a complete understanding of the project requirements and constraints.
+        4. Your job is not to write any code. Your focus is on Goals, Requirements, constraints
 
         Do not include any generic statements in your response. Make sure to extensively get human help.
         Before generating a final answer get human feedback. If human is not satisfied with the results, you will go through another iteration of generating the Goals, Requirements and constraints.
