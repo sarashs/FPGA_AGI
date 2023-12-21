@@ -4,6 +4,29 @@ import re
 from typing import Dict, List, Optional, Any, Union
 import os
 
+class FormatError(Exception):
+    """Exception raised for errors in the input format.
+
+    Attributes:
+        message -- explanation of the error
+    """
+
+    def __init__(self, message=None):
+        if message is None:
+            message = (
+                "Input should be of the following form:\n"
+                "{\n"
+                '    "Module_Name": "name of the module",\n'
+                '    "ports": ["specific inputs and outputs, including bit width"],\n'
+                '    "description": "detailed description of the module function",\n'
+                '    "connections": ["specific other modules it must connect to"],\n'
+                '    "hdl_language": "hdl language to be used"\n'
+                "}"
+            )
+        self.message = message
+        super().__init__(self.message)
+
+
 @dataclass
 class ProjectDetails:
     goals: str
