@@ -24,6 +24,7 @@ class RequirementAgentExecutor(AgentExecutor):
         - Perform additional "Doc_search" iterations with these new terms.
         - Continue this iterative process of refining and searching until you have a complete understanding of the project requirements and constraints.
         4. Your job is not to write any code. Your focus is on Goals, Requirements, constraints
+        5. The requirements must include the implementation hdl/hls language.
 
         Do not include any generic statements in your response. Make sure to extensively get human help.
         Before generating a final answer get human feedback. If human is not satisfied with the results, you will go through another iteration of generating the Goals, Requirements and constraints.
@@ -115,14 +116,16 @@ class ModuleAgentExecutor(AgentExecutor):
         Observation: the result of the action
         ... (this Thought/Thought/Thought/Action/Action Input/Observation can repeat N times)
         Thought: I now know the final answer
-        Final Answer: the final answer to the original input question must be a JSON list of modules and descriptions with the following format for each module
+        Final Answer: the final answer to the original input question must be a list of JSON dicts of modules and descriptions with the following format for each module
 
-        "Module_Name": {{
+        {{  "Module_Name": "name of the module",
             "ports": ["specific inputs and outputs, including bit width"],
             "description": "detailed description of the module function",
             "connections": ["specific other modules it must connect to"],
             "hdl_language": "hdl language to be used",
         }}
+
+        Do not return any extra comments, words or formatting.
 
         Goals: 
         {Goals}
@@ -149,7 +152,7 @@ class ModuleAgentExecutor(AgentExecutor):
             stop=["\nObservation:"],
             allowed_tools=tool_names
         )
-        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose)
+        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose, handle_parsing_errors=True)
     
 class HdlAgentExecutor(AgentExecutor):
     @classmethod
@@ -182,7 +185,7 @@ class HdlAgentExecutor(AgentExecutor):
         Thought: I now know the final answer
         Final Answer: You write the HDL/HLS code. the final code of the module must be JSON with the following format. Do not return any comments or extra formatting.
 
-        "Module_Name": {{
+        {{  "Module_Name": "name of the module",
             "ports": ["specific inputs and outputs, including bit width"],
             "description": "detailed description of the module function",
             "connections": ["specific other modules it must connect to"],
@@ -222,4 +225,4 @@ class HdlAgentExecutor(AgentExecutor):
             stop=["\nObservation:"],
             allowed_tools=tool_names
         )
-        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose)
+        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose, handle_parsing_errors=True)

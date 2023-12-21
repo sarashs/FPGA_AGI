@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import json
 import re
 from typing import Dict, List, Optional, Any, Union
+import os
 
 @dataclass
 class ProjectDetails:
@@ -51,6 +52,8 @@ def lang2suffix(lang):
     return ".v"
   if lang.lower() in ["hls", "cpp", "c++", "cplusplus", "c plus plus", "c", "hls c", "hls c++", "hls cpp", "vivado hls c++"]:
     return ".cpp"
+  if lang.lower() in ["vhdl", "vhd", "hdl"]:
+    return ".hdl"
   
 def extract_codes_from_string(string):
     # Extract the JSON part from the string
@@ -63,9 +66,11 @@ def save_solution(codes: List, solution_num: int = 0):
     """ Saves the generated solution """
     for item in codes:
         code = extract_codes_from_string(item)
-        module = code[list(code.keys())[0]]
-        suffix = lang2suffix(module["hdl_language"])
-        with open(f'./solution_{solution_num}/'+ list(code.keys())[0] + suffix, "w") as file:
-            content = module["code"]
+        suffix = lang2suffix(code["hdl_language"])
+        dir_path = f'./solution_{solution_num}/'
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+        with open(dir_path + code["Module_Name"] + suffix, "w+") as file:
+            content = code["code"]
             file.write(content)
     print("The solution was saved successfully!")
