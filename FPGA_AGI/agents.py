@@ -1,4 +1,3 @@
-import os
 import re
 from typing import Dict, List, Optional, Any, Union
 
@@ -9,34 +8,16 @@ from langchain.llms import BaseLLM
 from pydantic import BaseModel, Field
 from langchain.schema import AgentAction, AgentFinish, OutputParserException
 from langchain.prompts import StringPromptTemplate
+import warnings
 
 from FPGA_AGI.tools import *
+from FPGA_AGI.utils import *
+import FPGA_AGI.prompts as prompts
 
 class RequirementAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        prefix = """You are an FPGA design engineer who will provide a comprehensive explanation of the key functions, goals, and specific requirements necessary for the following design project.
-
-        1. Identifying essential features such as the deployment platform relevant to the design.
-        2. Outlining interface requirements and communication protocols involved.
-        3. Employ iterative 'Doc_search' for Comprehensive Understanding:
-        - After reviewing the initial search results, refine your search terms to fill in any gaps or address specific project aspects.
-        - Perform additional "Doc_search" iterations with these new terms.
-        - Continue this iterative process of refining and searching until you have a complete understanding of the project requirements and constraints.
-        4. Your job is not to write any code. Your focus is on Goals, Requirements, constraints
-        5. The requirements must include the implementation hdl/hls language.
-
-        Do not include any generic statements in your response. Make sure to extensively get human help.
-        Before generating a final answer get human feedback. If human is not satisfied with the results, you will go through another iteration of generating the Goals, Requirements and constraints.
-
-        Your final answer should be in the following format:
-        - Goals
-        ...
-        - Requirements
-        ...
-        - constraints
-        ...
-        """
+        prefix = prompts.prefix2
         suffix = """Question: {objective}
         {agent_scratchpad}"""
         prompt = ZeroShotAgent.create_prompt(
@@ -122,7 +103,7 @@ class ModuleAgentExecutor(AgentExecutor):
             "ports": ["specific inputs and outputs, including bit width"],
             "description": "detailed description of the module function",
             "connections": ["specific other modules it must connect to"],
-            "hdl_language": "hdl language to be used",
+            "hdl_language": "hdl language to be used"
         }}
 
         Do not return any extra comments, words or formatting.
@@ -226,3 +207,80 @@ class HdlAgentExecutor(AgentExecutor):
             allowed_tools=tool_names
         )
         return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose, handle_parsing_errors=True)
+
+class FPGA_AGI(BaseModel):
+    verbose: bool = False
+    solution_num: int = 0
+    requirement_agent_executor: RequirementAgentExecutor = None
+    module_agent_executor: ModuleAgentExecutor = None
+    hdl_agent_executor: HdlAgentExecutor = None
+    requirement: str = ''
+    project_details: ProjectDetails = None
+    module_list: List = []
+    codes: List = []
+    module_list_str: List = []
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if (self.requirement_agent_executor is None) or (self.module_agent_executor is None) or (self.hdl_agent_executor is None):
+            warnings.warn("RequirementAgentExecutor, ModuleAgentExecutor and HdlAgentExecutor are not set. Please use the from_llm class method to properly initialize it.", UserWarning)
+
+    @classmethod
+    def from_llm(cls, llm, verbose=False):
+        tools = [
+            web_search_tool,
+            document_search_tool,
+            #human_input_tool
+        ]
+        requirement_agent_executor = RequirementAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
+        tools = [
+            web_search_tool,
+            document_search_tool,
+        ]
+        module_agent_executor = ModuleAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
+        tools = [
+            #web_search_tool,
+            document_search_tool,
+        ]
+        hdl_agent_executor = HdlAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
+        return cls(verbose=verbose, requirement_agent_executor=requirement_agent_executor, module_agent_executor=module_agent_executor, hdl_agent_executor=hdl_agent_executor)
+
+    def _run(self, objective, action_type):
+        if action_type == 'full':
+            self.requirement = self.requirement_agent_executor.run(objective)
+            self.project_details = extract_project_details(self.requirement)
+        elif action_type == 'module':
+            assert type(objective) == ProjectDetails, "objective needs to be of ProjectDetails type for module level design"
+            self.project_details = objective
+        if action_type == 'hdl':
+            try:
+                self.module_list = [json.loads(objective)]
+                self.project_details = ProjectDetails(goals="design the specified module",requirements="no specific requirements",constraints="no specific constraints")
+            except json.JSONDecodeError as e:
+                raise FormatError
+        else:
+            self.module_list = self.module_agent_executor.run(Goals=self.project_details.goals, Requirements=self.project_details.requirements, Constraints=self.project_details.constraints)
+            self.module_list = extract_json_from_string(self.module_list)
+        self.codes = []
+        self.module_list_str = [str(item) for item in self.module_list]
+        #current_modules_verified = json.loads(current_modules_verified)
+        for module in self.module_list:
+            code = self.hdl_agent_executor.run(
+                Goals=self.project_details.goals,
+                Requirements=self.project_details.requirements,
+                Constraints=self.project_details.constraints,
+                module_list='\n'.join(self.module_list_str),
+                codes='\n'.join(self.codes),
+                module=str(module)
+                )
+            self.codes.append(code)
+        save_solution(self.codes, solution_num=self.solution_num)
+        self.project_details.save_to_file(solution_num=self.solution_num)
+        self.solution_num += 1
+
+    def __call__(self, objective: Any, action_type: str = 'full'):
+        if (self.requirement_agent_executor is None) or (self.module_agent_executor is None) or (self.hdl_agent_executor is None):
+            raise Exception("RequirementAgentExecutor, ModuleAgentExecutor and HdlAgentExecutor are not set. Please use the from_llm class method to properly initialize it.")
+        if not (action_type in ['full', 'module', 'hdl']):
+            raise ValueError("Invalid action type specified.")
+        self._run(objective, action_type)

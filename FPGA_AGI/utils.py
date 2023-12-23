@@ -3,6 +3,7 @@ import json
 import re
 from typing import Dict, List, Optional, Any, Union
 import os
+import shutil
 
 class FormatError(Exception):
     """Exception raised for errors in the input format.
@@ -33,6 +34,13 @@ class ProjectDetails:
     requirements: str
     constraints: str
 
+    def save_to_file(self, solution_num):
+        dir_path = f'./solution_{solution_num}/'
+        with open(os.path.join(dir_path, "GRC.md"), "w+") as file:
+            file.write(f"Goals:\n{self.goals}\n\n")
+            file.write(f"Requirements:\n{self.requirements}\n\n")
+            file.write(f"Constraints:\n{self.constraints}\n")
+
 def extract_json_from_string(string):
     # Extract the JSON part from the string
     json_string = string[string.find('['):string.rfind(']')+1]
@@ -47,9 +55,9 @@ def extract_project_details(text):
     goals, requirements, constraints = "", "", ""
     current_section = None
     sections = {
-        re.compile(r"[-]*\s*Goals[:]*"): "goals",
-        re.compile(r"[-]*\s*Requirements[:]*"): "requirements",
-        re.compile(r"[-]*\s*Constraints[:]*"): "constraints"
+        re.compile(r"\**\s*\bGoals\b\s*:*", re.IGNORECASE): "goals",
+        re.compile(r"\**\s*\bRequirements\b\s*:*", re.IGNORECASE): "requirements",
+        re.compile(r"\**\s*\bConstraints\b\s*:*", re.IGNORECASE): "constraints"
     }
     for line in lines:
         for section_regex in sections:
@@ -91,9 +99,12 @@ def save_solution(codes: List, solution_num: int = 0):
         code = extract_codes_from_string(item)
         suffix = lang2suffix(code["hdl_language"])
         dir_path = f'./solution_{solution_num}/'
-        if not os.path.exists(dir_path):
+        if os.path.exists(dir_path) and os.path.isdir(dir_path):
+            #shutil.rmtree(dir_path)
+            pass
+        else:
             os.makedirs(dir_path)
-        with open(dir_path + code["Module_Name"] + suffix, "w+") as file:
+        with open(os.path.join(dir_path, code["Module_Name"] + suffix), "w+") as file:
             content = code["code"]
             file.write(content)
     print("The solution was saved successfully!")
