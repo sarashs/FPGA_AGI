@@ -1,5 +1,4 @@
 import os
-from FPGA_AGI.chains import DesignAndEvaluationChain
 from langchain.agents import Tool
 from langchain import SerpAPIWrapper
 from langchain.embeddings.openai import OpenAIEmbeddings
@@ -97,6 +96,11 @@ def save_file(input_dict: str):
         with open(os.path.join(path, 'design_tool_problematic.json'), 'a+') as f:
             f.write(file)
 file_save_tool = Tool(name = "Save",
-        func=save_file,
-        description="useful for when you need to save a file. The input to this tool is a string with the following format: File_name_and_extension >>> content \n Example: \"output.json >>> {{key: value}}\" \n file extentions can include .v .cpp .sv .hdl .md"
-    )   
+                      func=save_file,
+                      description="useful for when you need to save a file. The input to this tool is a string with the following format: File_name_and_extension >>> content \n Example: \"output.json >>> {{key: value}}\" \n file extentions can include .v .cpp .sv .hdl .md"
+                      )
+def DUD(input_dict: str):
+    return None
+think_again_tool = Tool(name = "Think",
+                        func=DUD,
+                        description="useful when you need to think more. This tool does not return any output.")

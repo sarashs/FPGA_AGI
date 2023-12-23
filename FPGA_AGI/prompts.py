@@ -27,6 +27,10 @@ class PromptManager:
             return self.prompts[prompt_name][-1]
 
 prompt_manager = PromptManager()
+########
+# Agents
+########
+# Requirement Agent
 prompt_manager.add_prompt("RequirementAgentExecutor", """You are an FPGA design engineer who will provide a comprehensive explanation of the key functions, goals, and specific requirements necessary for the following design project.
                         1. Identifying essential features such as the deployment platform relevant to the design.
                         2. Outlining interface requirements and communication protocols involved.
@@ -63,6 +67,7 @@ prompt_manager.add_prompt("RequirementAgentExecutor", """You are an FPGA design 
                         *   **Requirements**: \[Detailed requirements, including all technical specifications and instructions provided\]
                         *   **Constraints**: \[List of constraints, considering the project's limitations and challenges\]""", [])
 
+# Module Generation Agent
 prompt_manager.add_prompt("ModuleAgentExecutor", """Generate a list of necessary modules and their descriptions for the FPGA based hardware design project.
                         Include a top module which contains all of the other modules in it. Return the results in an itemized markdown format.
 
@@ -102,6 +107,7 @@ prompt_manager.add_prompt("ModuleAgentExecutor", """Generate a list of necessary
                         {Constraints}
                         {agent_scratchpad}""", ["Goals", "Requirements", "Constraints", "intermediate_steps"])
 
+# HDL Generation Agent 
 prompt_manager.add_prompt("HdlAgentExecutor", """You are an FPGA hardware engineer and you will code the module given after "Module". You will write fully functioning code not code examples or templates. 
                         The final solution you prepare must compile into a synthesizable FPGA solution. It is of utmost important that you fully implement the module and do not leave anything to be coded later.
 
@@ -152,3 +158,39 @@ prompt_manager.add_prompt("HdlAgentExecutor", """You are an FPGA hardware engine
                         {module}
 
                         {agent_scratchpad}""", ["Goals", "Requirements", "Constraints", "module_list", "codes", "module", "intermediate_steps"])
+########
+# Chains
+########
+# Test bench generation chain
+prompt_manager.add_prompt("TestBenchCreationChain", """You are an FPGA hardware engineer and you will write a test-bench the module given after "Module". 
+
+                        Some guidelines:
+                        - Your test benches are written in the language that is used for coding the actual code.
+                        - Your test bench must cover the function of the module you are testing
+                        - Your testbench module name must be "original_module-tb". basically adding "-tb" to the original module's name
+
+                        You are provided with the following:
+
+                        Goals: the main goal(s) of the design
+                        Requirements: design requirements
+                        Constraints: design constraints
+                        Module list: list of modules you will write test-benches for
+                        Module: The module that you are currently building along with its code
+
+                        Final Answer: You write the HDL/HLS code. the final code of the module must be JSON with the following format. Do not return any comments or extra formatting.
+
+                        {{  "Module_Name": "test-bench module name",
+                            "hdl_language": "hdl language to be used",
+                            "code": "Test benchcode in line with the module code. All corner cases must be covered."
+                        }}
+
+                        Goals: 
+                        {Goals}
+                        Requirements: 
+                        {Requirements}
+                        Constraints: 
+                        {Constraints}
+                        Module list:
+                        {module_list}
+                        Module:
+                        {module}""", ["Goals", "Requirements", "Constraints", "module_list", "module"])

@@ -1,5 +1,6 @@
 import re
 from typing import Dict, List, Optional, Any, Union
+from time import sleep
 
 from langchain.agents import ZeroShotAgent, Tool, AgentExecutor, LLMSingleActionAgent, AgentOutputParser
 from langchain import OpenAI, LLMChain, PromptTemplate
@@ -9,10 +10,12 @@ from pydantic import BaseModel, Field
 from langchain.schema import AgentAction, AgentFinish, OutputParserException
 from langchain.prompts import StringPromptTemplate
 import warnings
+import shutil
 
 from FPGA_AGI.tools import *
 from FPGA_AGI.utils import *
 from FPGA_AGI.prompts import *
+from FPGA_AGI.chains import TestBenchCreationChain
 
 class RequirementAgentExecutor(AgentExecutor):
     @classmethod
@@ -128,27 +131,33 @@ class FPGA_AGI(BaseModel):
     requirement_agent_executor: RequirementAgentExecutor = None
     module_agent_executor: ModuleAgentExecutor = None
     hdl_agent_executor: HdlAgentExecutor = None
-    requirement: str = ''
     project_details: ProjectDetails = None
+    test_bench_creator: TestBenchCreationChain = None
     module_list: List = []
     codes: List = []
+    test_benches: List = []
     module_list_str: List = []
 
     def __init__(self, **data):
         super().__init__(**data)
         if (self.requirement_agent_executor is None) or (self.module_agent_executor is None) or (self.hdl_agent_executor is None):
             warnings.warn("RequirementAgentExecutor, ModuleAgentExecutor and HdlAgentExecutor are not set. Please use the from_llm class method to properly initialize it.", UserWarning)
+        dir_path = f'./solution_{self.solution_num}/'
+        if os.path.exists(dir_path) and os.path.isdir(dir_path):
+            shutil.rmtree(dir_path)
 
     @classmethod
     def from_llm(cls, llm, verbose=False):
         tools = [
-            web_search_tool,
+            #web_search_tool,
+            think_again_tool,
             document_search_tool,
             #human_input_tool
         ]
         requirement_agent_executor = RequirementAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
         tools = [
-            web_search_tool,
+            #web_search_tool,
+            think_again_tool,
             document_search_tool,
         ]
         module_agent_executor = ModuleAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
@@ -157,12 +166,13 @@ class FPGA_AGI(BaseModel):
             document_search_tool,
         ]
         hdl_agent_executor = HdlAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
-        return cls(verbose=verbose, requirement_agent_executor=requirement_agent_executor, module_agent_executor=module_agent_executor, hdl_agent_executor=hdl_agent_executor)
+        test_bench_creator = TestBenchCreationChain.from_llm(llm=llm, verbose=verbose)
+        return cls(verbose=verbose, requirement_agent_executor=requirement_agent_executor, module_agent_executor=module_agent_executor, hdl_agent_executor=hdl_agent_executor, test_bench_creator=test_bench_creator)
 
     def _run(self, objective, action_type):
         if action_type == 'full':
-            self.requirement = self.requirement_agent_executor.run(objective)
-            self.project_details = extract_project_details(self.requirement)
+            requirement = self.requirement_agent_executor.run(objective)
+            self.project_details = extract_project_details(requirement)
         elif action_type == 'module':
             assert type(objective) == ProjectDetails, "objective needs to be of ProjectDetails type for module level design"
             self.project_details = objective
@@ -176,6 +186,7 @@ class FPGA_AGI(BaseModel):
             self.module_list = self.module_agent_executor.run(Goals=self.project_details.goals, Requirements=self.project_details.requirements, Constraints=self.project_details.constraints)
             self.module_list = extract_json_from_string(self.module_list)
         self.codes = []
+        self.test_benches = []
         self.module_list_str = [str(item) for item in self.module_list]
         #current_modules_verified = json.loads(current_modules_verified)
         for module in self.module_list:
@@ -187,10 +198,23 @@ class FPGA_AGI(BaseModel):
                 codes='\n'.join(self.codes),
                 module=str(module)
                 )
+            sleep(10)
+            tb = self.test_bench_creator.run(
+                Goals=self.project_details.goals,
+                Requirements=self.project_details.requirements,
+                Constraints=self.project_details.constraints,
+                module_list='\n'.join(self.module_list_str),
+                module=code                
+            )
+            self.test_benches.append(tb)
             self.codes.append(code)
         save_solution(self.codes, solution_num=self.solution_num)
+        save_solution(self.test_benches, solution_num=self.solution_num)
         self.project_details.save_to_file(solution_num=self.solution_num)
         self.solution_num += 1
+        dir_path = f'./solution_{self.solution_num}/'
+        if os.path.exists(dir_path) and os.path.isdir(dir_path):
+            shutil.rmtree(dir_path)
 
     def __call__(self, objective: Any, action_type: str = 'full'):
         if (self.requirement_agent_executor is None) or (self.module_agent_executor is None) or (self.hdl_agent_executor is None):

@@ -3,7 +3,7 @@ import json
 import re
 from typing import Dict, List, Optional, Any, Union
 import os
-import shutil
+import warnings
 
 class FormatError(Exception):
     """Exception raised for errors in the input format.
@@ -96,8 +96,12 @@ def extract_codes_from_string(string):
 def save_solution(codes: List, solution_num: int = 0):
     """ Saves the generated solution """
     for item in codes:
-        code = extract_codes_from_string(item)
-        suffix = lang2suffix(code["hdl_language"])
+        try:
+            code = extract_codes_from_string(item)
+            suffix = lang2suffix(code["hdl_language"])
+        except json.JSONDecodeError as e:
+            warnings.warn("There are issues with the generated module. The solution may not work. investigare agent.codes and agent.test_benches", UserWarning)
+            continue
         dir_path = f'./solution_{solution_num}/'
         if os.path.exists(dir_path) and os.path.isdir(dir_path):
             #shutil.rmtree(dir_path)
