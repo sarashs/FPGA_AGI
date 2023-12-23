@@ -12,12 +12,12 @@ import warnings
 
 from FPGA_AGI.tools import *
 from FPGA_AGI.utils import *
-import FPGA_AGI.prompts as prompts
+from FPGA_AGI.prompts import *
 
 class RequirementAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        prefix = prompts.prefix2
+        prefix = prompt_manager("RequirementAgentExecutor").prompt
         suffix = """Question: {objective}
         {agent_scratchpad}"""
         prompt = ZeroShotAgent.create_prompt(
@@ -77,51 +77,14 @@ class CustomOutputParser(AgentOutputParser):
 class ModuleAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        module_agent_template = """Generate a list of necessary modules and their descriptions for the FPGA based hardware design project.
-        Include a top module which contains all of the other modules in it. Return the results in an itemized markdown format.
-
-        You have access to the following tools:
-
-        {tools}
-
-        Use the following format:
-
-        Goals: the main goal(s) of the design
-        Requirements: design requirements
-        Constraints: design constraints
-        Thought: you should think about satisfying Goals and requirements
-        Thought: you should further refine your thought
-        Thought: you should think about what to do
-        Action: the action to take, should be one of [{tool_names}]
-        Action Input: the input to the action
-        Observation: the result of the action
-        ... (this Thought/Thought/Thought/Action/Action Input/Observation can repeat N times)
-        Thought: I now know the final answer
-        Final Answer: the final answer to the original input question must be a list of JSON dicts of modules and descriptions with the following format for each module
-
-        {{  "Module_Name": "name of the module",
-            "ports": ["specific inputs and outputs, including bit width"],
-            "description": "detailed description of the module function",
-            "connections": ["specific other modules it must connect to"],
-            "hdl_language": "hdl language to be used"
-        }}
-
-        Do not return any extra comments, words or formatting.
-
-        Goals: 
-        {Goals}
-        Requirements: 
-        {Requirements}
-        Constraints: 
-        {Constraints}
-        {agent_scratchpad}"""
+        module_agent_template = prompt_manager("ModuleAgentExecutor").prompt
 
         prompt = CustomPromptTemplate(
             template=module_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=["Goals", "Requirements", "Constraints", "intermediate_steps"]
+            input_variables=prompt_manager("ModuleAgentExecutor").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
@@ -138,63 +101,14 @@ class ModuleAgentExecutor(AgentExecutor):
 class HdlAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        hdl_agent_template = """You are an FPGA hardware engineer and you will code the module given after "Module". You will write fully functioning code not code examples or templates. 
-        The final solution you prepare must compile into a synthesizable FPGA solution. It is of utmost important that you fully implement the module and do not leave anything to be coded later.
-
-        Some guidelines:
-        - DO NOT LEAVE THE PERFIPHERAL LOGIC TO THE USER AND FULLY DESIGN IT.
-        - When using document search, you might have to use the tool multiple times and with various search terms in order to get better resutls.
-        - Leave sufficient amount of comments in the code to enable further development and debugging.
-
-        You have access to the following tools:
-
-        {tools}
-
-        Use the following format:
-
-        Goals: the main goal(s) of the design
-        Requirements: design requirements
-        Constraints: design constraints
-        Module list: list of modules you will build
-        Module Codes: HDL/HLS code for the modules that you have already built
-        Module: The module that you are currently building
-        Thought: you should think about finding more about the coding style or example codes
-        Action: the action to take, should be one of [{tool_names}]
-        Action Input: the input to the action
-        Observation: the result of the action
-        ... (this Thought/Action/Action Input/Observation can repeat N times)
-        Thought: I now know the final answer
-        Final Answer: You write the HDL/HLS code. the final code of the module must be JSON with the following format. Do not return any comments or extra formatting.
-
-        {{  "Module_Name": "name of the module",
-            "ports": ["specific inputs and outputs, including bit width"],
-            "description": "detailed description of the module function",
-            "connections": ["specific other modules it must connect to"],
-            "hdl_language": "hdl language to be used",
-            "code": "Synthesizable HLS/HDL code in line with the Goals, Requirements and Constraints. This code must be fully implemented and no aspect of it should be left to the user."
-        }}
-
-        Goals: 
-        {Goals}
-        Requirements: 
-        {Requirements}
-        Constraints: 
-        {Constraints}
-        Module list:
-        {module_list}
-        Module Codes:
-        {codes}
-        Module:
-        {module}
-
-        {agent_scratchpad}"""
+        hdl_agent_template = prompt_manager("HdlAgentExecutor").prompt
 
         prompt = CustomPromptTemplate(
             template=hdl_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=["Goals", "Requirements", "Constraints", "module_list", "codes", "module", "intermediate_steps"]
+            input_variables=prompt_manager("HdlAgentExecutor").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
