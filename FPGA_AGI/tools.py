@@ -28,14 +28,22 @@ llm = ChatOpenAI(model='gpt-3.5-turbo', temperature=0)
 
 if os.path.isdir('knowledge_base'):
     persistent_client = chromadb.PersistentClient(path="./knowledge_base")
-    pdfsearch = Chroma(client=persistent_client, embedding_function=embeddings, collection_name= "xilinx_manuals")
+    pdfsearch = Chroma(client=persistent_client, embedding_function=embeddings, collection_name= "knowledge_base")
 else:
     # Load documents
     loader = DirectoryLoader('.', glob="./*.pdf", loader_cls=PyPDFLoader)
     documents = loader.load()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     texts = text_splitter.split_documents(documents)
-    pdfsearch = Chroma.from_documents(texts, embeddings, collection_name= "xilinx_manuals", persist_directory="./knowledge_base") 
+    pdfsearch = Chroma.from_documents(texts, embeddings, collection_name= "knowledge_base", persist_directory="./knowledge_base")
+    # load axi verilog samples 
+    loader = DirectoryLoader('.', glob="./*.v")
+    documents = loader.load()
+    pdfsearch.add_documents(documents)
+    # System verilog samples from harris book
+    loader = DirectoryLoader('.', glob="./*.sv")
+    documents = loader.load()
+    pdfsearch.add_documents(documents)
 retriever1 = pdfsearch.as_retriever(search_kwargs={"k": 3})
 retriever1.search_type = "mmr"
 search_chain = RetrievalQAWithSourcesChain.from_llm(llm, retriever=retriever1, return_source_documents=True,)
@@ -103,4 +111,4 @@ def DUD(input_dict: str):
     return None
 think_again_tool = Tool(name = "Think",
                         func=DUD,
-                        description="useful when you need to think more. This tool does not return any output.")
+                        description="useful when you need to think more. This tool does not return any output but you get a chance to think again.")

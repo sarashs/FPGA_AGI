@@ -104,14 +104,14 @@ class ModuleAgentExecutor(AgentExecutor):
 class HdlAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        hdl_agent_template = prompt_manager("HdlAgentExecutor").prompt
+        hdl_agent_template = prompt_manager("HdlAgentExecutor_v2").prompt
 
         prompt = CustomPromptTemplate(
             template=hdl_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("HdlAgentExecutor").input_vars
+            input_variables=prompt_manager("HdlAgentExecutor_v2").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
@@ -162,8 +162,9 @@ class FPGA_AGI(BaseModel):
         ]
         module_agent_executor = ModuleAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
         tools = [
-            #web_search_tool,
+            web_search_tool,
             document_search_tool,
+            think_again_tool,
         ]
         hdl_agent_executor = HdlAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
         test_bench_creator = TestBenchCreationChain.from_llm(llm=llm, verbose=verbose)
@@ -179,7 +180,7 @@ class FPGA_AGI(BaseModel):
         if action_type == 'hdl':
             try:
                 self.module_list = [json.loads(objective)]
-                self.project_details = ProjectDetails(goals="design the specified module",requirements="no specific requirements",constraints="no specific constraints")
+                self.project_details = ProjectDetails(goals=f"design the specified module: \n {objective}",requirements="no specific requirements",constraints="no specific constraints")
             except json.JSONDecodeError as e:
                 raise FormatError
         else:
@@ -198,18 +199,19 @@ class FPGA_AGI(BaseModel):
                 codes='\n'.join(self.codes),
                 module=str(module)
                 )
-            sleep(10)
-            tb = self.test_bench_creator.run(
-                Goals=self.project_details.goals,
-                Requirements=self.project_details.requirements,
-                Constraints=self.project_details.constraints,
-                module_list='\n'.join(self.module_list_str),
-                module=code                
-            )
-            self.test_benches.append(tb)
-            self.codes.append(code)
+            sleep(5)
+# TODO: Uncomment the testbench generation and save lines if need be
+        #    tb = self.test_bench_creator.run(
+        #        Goals=self.project_details.goals,
+        #        Requirements=self.project_details.requirements,
+        #        Constraints=self.project_details.constraints,
+        #        module_list='\n'.join(self.module_list_str),
+        #        module=code                
+        #    )
+        #    self.test_benches.append(tb)
+            self.codes.append((module, extract_codes_from_string(code)))
         save_solution(self.codes, solution_num=self.solution_num)
-        save_solution(self.test_benches, solution_num=self.solution_num)
+        #save_solution(self.test_benches, solution_num=self.solution_num)
         self.project_details.save_to_file(solution_num=self.solution_num)
         self.solution_num += 1
         dir_path = f'./solution_{self.solution_num}/'

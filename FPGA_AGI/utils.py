@@ -85,8 +85,39 @@ def lang2suffix(lang):
     return ".cpp"
   if lang.lower() in ["vhdl", "vhd", "hdl"]:
     return ".hdl"
-  
+
+LANGS = (["systemverilog", "system verilog", "system_verilog", "system-verilog", "sv"] +
+         ["v", "verilog"] +
+         ["hls", "cpp", "c++", "cplusplus", "c plus plus", "c", "hls c", "hls c++", "hls cpp", "vivado hls c++"] +
+         ["vhdl", "vhd", "hdl"])
+
 def extract_codes_from_string(string):
+    lower_string = string.lower()  # Convert the entire string to lowercase
+
+    for lang in LANGS:
+        # Create the search pattern for each language in lowercase
+        start_pattern = f'```{lang.lower()}\n'
+        end_pattern = '\n```'
+
+        # Find the start and end indices for each code block
+        start_index = lower_string.find(start_pattern)
+        end_index = lower_string.rfind(end_pattern)
+
+        if start_index != -1 and end_index != -1:
+            # Calculate the actual start index in the original string
+            actual_start_index = start_index + len(start_pattern)
+
+            # Extract and store the code block from the original string
+            code = string[actual_start_index:end_index]
+
+    # Check if any code blocks have been extracted
+    if not code:
+        # If no code blocks are found, return the original string
+        return string
+    else:
+        return code
+
+def extract_json_from_string(string):
     # Extract the JSON part from the string
     json_string = string[string.find('```json\n')+8:string.rfind('\n```')]
     # Convert the JSON string to a Python object
@@ -95,20 +126,15 @@ def extract_codes_from_string(string):
 
 def save_solution(codes: List, solution_num: int = 0):
     """ Saves the generated solution """
-    for item in codes:
-        try:
-            code = extract_codes_from_string(item)
-            suffix = lang2suffix(code["hdl_language"])
-        except json.JSONDecodeError as e:
-            warnings.warn("There are issues with the generated module. The solution may not work. investigare agent.codes and agent.test_benches", UserWarning)
-            continue
+    for module, code in codes:
+        suffix = lang2suffix(module["hdl_language"])
         dir_path = f'./solution_{solution_num}/'
         if os.path.exists(dir_path) and os.path.isdir(dir_path):
             #shutil.rmtree(dir_path)
             pass
         else:
             os.makedirs(dir_path)
-        with open(os.path.join(dir_path, code["Module_Name"] + suffix), "w+") as file:
-            content = code["code"]
+        with open(os.path.join(dir_path, module["Module_Name"] + suffix), "w+") as file:
+            content = code
             file.write(content)
     print("The solution was saved successfully!")
