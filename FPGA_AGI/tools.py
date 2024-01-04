@@ -3,11 +3,11 @@ from langchain.agents import Tool
 from langchain import SerpAPIWrapper
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.llms import BaseLLM
-
 from langchain.chat_models import ChatOpenAI
 from langchain.tools import HumanInputRun
 
 from langchain.vectorstores import Chroma
+from langchain.docstore.document import Document
 #from langchain.docstore import InMemoryDocstore
 
 from langchain.document_loaders import PyPDFLoader
@@ -15,16 +15,29 @@ from langchain.document_loaders import DirectoryLoader
 from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
 import chromadb
 from langchain.tools.base import BaseTool
-from langchain.chains import RetrievalQAWithSourcesChain
+from langchain.chains import RetrievalQAWithSourcesChain, LLMMathChain
 import warnings
+from langchain.utilities import PythonREPL
+
+from FPGA_AGI.utils import extract_codes_from_string
 
 # Define your embedding model
 embeddings = OpenAIEmbeddings()
-llm = ChatOpenAI(model='gpt-3.5-turbo', temperature=0)
+llm = ChatOpenAI(model='gpt-4-1106-preview', temperature=0)
 # Initialize the vectorstore as empty
 #vectorstore = Chroma("langchain_store", embeddings)
 
 ### RAG tool
+
+def load_sample_code_files(file_ending):
+    documents = []
+    directory = '.'
+    for filename in os.listdir(directory):
+        if filename.endswith(file_ending):
+            with open(os.path.join(directory, filename), 'r', encoding='utf-8') as file:
+                content = file.read()
+                documents.append(Document(page_content=filename + "\n" + content, metadata={"source": filename}))
+    return documents
 
 if os.path.isdir('knowledge_base'):
     persistent_client = chromadb.PersistentClient(path="./knowledge_base")
@@ -37,12 +50,10 @@ else:
     texts = text_splitter.split_documents(documents)
     pdfsearch = Chroma.from_documents(texts, embeddings, collection_name= "knowledge_base", persist_directory="./knowledge_base")
     # load axi verilog samples 
-    loader = DirectoryLoader('.', glob="./*.v")
-    documents = loader.load()
+    documents = load_sample_code_files('.v')
     pdfsearch.add_documents(documents)
     # System verilog samples from harris book
-    loader = DirectoryLoader('.', glob="./*.sv")
-    documents = loader.load()
+    documents = load_sample_code_files('.sv')
     pdfsearch.add_documents(documents)
 retriever1 = pdfsearch.as_retriever(search_kwargs={"k": 3})
 retriever1.search_type = "mmr"
@@ -50,9 +61,30 @@ search_chain = RetrievalQAWithSourcesChain.from_llm(llm, retriever=retriever1, r
 document_search_tool = Tool(
         name="Doc_Search",
         func=search_chain,
-        description="useful for when you need to look up information in xilinx device manuals/datasheets, communications protocols, fpga textbooks, and digital design textbooks and other technical information."
+        description="useful for when you need to search for information, procedures, methods within documents."
         " The input to this tool is your key phrase that you are searching. You need to try a few different keyword combinations to get the best result."
     )
+
+code_search_tool = Tool(
+        name="Code_Search",
+        func=search_chain,
+        description="useful for when you need to look up sample codes."
+        " The input to this tool is your key phrase that you are searching. You need to try a few different keyword combinations to get the best result."
+    )
+
+### Math tool
+python_repl = PythonREPL()
+
+def python_run(input_dict: str):
+    # This is to take care of markdown formatting
+    return python_repl.run(extract_codes_from_string(input_dict)) 
+
+llm_math_tool = Tool(
+    name="python_repl",
+    description="A Python shell. Use this to execute python commands. Input should be a valid python command. You can use this tool for math computations of any kind in python. If you want to see the output of a value, you should print it out with `print(...)`.",
+    func=python_run,
+)
+
 ### Web search tool
 search = SerpAPIWrapper()
 web_search_tool = Tool(
@@ -108,7 +140,7 @@ file_save_tool = Tool(name = "Save",
                       description="useful for when you need to save a file. The input to this tool is a string with the following format: File_name_and_extension >>> content \n Example: \"output.json >>> {{key: value}}\" \n file extentions can include .v .cpp .sv .hdl .md"
                       )
 def DUD(input_dict: str):
-    return None
+    return f'your thought is: {input_dict}'
 think_again_tool = Tool(name = "Think",
                         func=DUD,
-                        description="useful when you need to think more. This tool does not return any output but you get a chance to think again.")
+                        description="useful when you need to think more. This tool returns your own thought that you pass as input to the tool and cannot answer a question.")

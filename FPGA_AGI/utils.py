@@ -41,6 +41,15 @@ class ProjectDetails:
             file.write(f"Requirements:\n{self.requirements}\n\n")
             file.write(f"Constraints:\n{self.constraints}\n")
 
+def fix_json_escapes(json_string):
+    # Replace invalid escape sequences
+    # Replace \(\ and \)\ with \\(\ and \\)\ respectively
+    json_string = re.sub(r'\\(\()', r'\\\\\1', json_string)
+    json_string = re.sub(r'\\(\))', r'\\\\\1', json_string)
+    # Replace single backslashes with double backslashes, except for valid escape characters
+    json_string = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_string)
+    return json_string
+
 def extract_json_from_string(string):
     # Extract the JSON part from the string
     json_string = string[string.find('['):string.rfind(']')+1]
@@ -89,11 +98,11 @@ def lang2suffix(lang):
 LANGS = (["systemverilog", "system verilog", "system_verilog", "system-verilog", "sv"] +
          ["v", "verilog"] +
          ["hls", "cpp", "c++", "cplusplus", "c plus plus", "c", "hls c", "hls c++", "hls cpp", "vivado hls c++"] +
-         ["vhdl", "vhd", "hdl"])
+         ["vhdl", "vhd", "hdl"] + ["python"])
 
 def extract_codes_from_string(string):
     lower_string = string.lower()  # Convert the entire string to lowercase
-
+    code = None
     for lang in LANGS:
         # Create the search pattern for each language in lowercase
         start_pattern = f'```{lang.lower()}\n'
@@ -109,6 +118,7 @@ def extract_codes_from_string(string):
 
             # Extract and store the code block from the original string
             code = string[actual_start_index:end_index]
+            break
 
     # Check if any code blocks have been extracted
     if not code:
@@ -119,9 +129,12 @@ def extract_codes_from_string(string):
 
 def extract_json_from_string(string):
     # Extract the JSON part from the string
-    json_string = string[string.find('```json\n')+8:string.rfind('\n```')]
+    if string.find('```json\n') != -1:
+        json_string = string[string.find('```json\n')+8:string.rfind('\n```')]
+    else:
+        json_string = string
     # Convert the JSON string to a Python object
-    data = json.loads(json_string)
+    data = json.loads(fix_json_escapes(json_string))
     return data
 
 def save_solution(codes: List, solution_num: int = 0):

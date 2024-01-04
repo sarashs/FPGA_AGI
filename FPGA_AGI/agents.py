@@ -20,14 +20,14 @@ from FPGA_AGI.chains import TestBenchCreationChain
 class RequirementAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        prefix = prompt_manager("RequirementAgentExecutor").prompt
+        prefix = prompt_manager("RequirementAgentExecutor_v2").prompt
         suffix = """Question: {objective}
         {agent_scratchpad}"""
         prompt = ZeroShotAgent.create_prompt(
             tools, 
             prefix=prefix, 
             suffix=suffix, 
-            input_variables=["objective", "agent_scratchpad"]
+            input_variables=prompt_manager("RequirementAgentExecutor_v2").input_vars
         )
         llm_chain = LLMChain(llm=llm, prompt=prompt)
         tool_names = [tool.name for tool in tools]
@@ -135,6 +135,7 @@ class FPGA_AGI(BaseModel):
     test_bench_creator: TestBenchCreationChain = None
     module_list: List = []
     codes: List = []
+    mod_codes: List = []
     test_benches: List = []
     module_list_str: List = []
 
@@ -162,7 +163,9 @@ class FPGA_AGI(BaseModel):
         ]
         module_agent_executor = ModuleAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
         tools = [
-            web_search_tool,
+            #web_search_tool,
+            llm_math_tool,
+            code_search_tool,
             document_search_tool,
             think_again_tool,
         ]
@@ -186,6 +189,7 @@ class FPGA_AGI(BaseModel):
         else:
             self.module_list = self.module_agent_executor.run(Goals=self.project_details.goals, Requirements=self.project_details.requirements, Constraints=self.project_details.constraints)
             self.module_list = extract_json_from_string(self.module_list)
+        self.mod_codes = []
         self.codes = []
         self.test_benches = []
         self.module_list_str = [str(item) for item in self.module_list]
@@ -209,8 +213,9 @@ class FPGA_AGI(BaseModel):
         #        module=code                
         #    )
         #    self.test_benches.append(tb)
-            self.codes.append((module, extract_codes_from_string(code)))
-        save_solution(self.codes, solution_num=self.solution_num)
+            self.codes.append(extract_codes_from_string(code))
+            self.mod_codes.append((module, extract_codes_from_string(code)))
+        save_solution(self.mod_codes, solution_num=self.solution_num)
         #save_solution(self.test_benches, solution_num=self.solution_num)
         self.project_details.save_to_file(solution_num=self.solution_num)
         self.solution_num += 1

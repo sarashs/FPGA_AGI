@@ -41,9 +41,10 @@ prompt_manager.add_prompt("RequirementAgentExecutor", """You are an FPGA design 
                         4. Your job is not to write any code. Your focus is on Goals, Requirements, constraints
                         5. The requirements must include the implementation hdl/hls language.
                         6. All of the technical information provided to you via the input must be included within the Goals, Requirements and constraints.
+                        7. Do not include non technical items such as budget and timeline.
                         Do not include any generic statements in your response. Make sure to extensively get human help.
                         Before generating a final answer get human feedback. If human is not satisfied with the results, you will go through another iteration of generating the Goals, Requirements and constraints.
-                        Your final answer should be in the following format:
+                        Your final answer which should not include any generic statements should be in the following format:
                         - Goals
                         ...
                         - Requirements
@@ -52,20 +53,21 @@ prompt_manager.add_prompt("RequirementAgentExecutor", """You are an FPGA design 
                         ...
                         """, [])
 
-prompt_manager.add_prompt("RequirementAgentExecutor", """You are an FPGA design engineer tasked with providing a comprehensive explanation of the key functions, goals, and specific requirements for a design project. Your responsibilities include:
+prompt_manager.add_prompt("RequirementAgentExecutor_v2", """You are an FPGA design engineer tasked with providing a comprehensive explanation of the key functions, goals, and specific requirements for a design project. Your responsibilities include:
 
                         1.  **Broad Overview**: Provide a high-level overview of the project, encompassing essential aspects like the deployment platform and key functionalities.
                         2.  **Technical Details**: Ensure that all technical information provided, including any specific features, instructions, or protocols, is thoroughly incorporated into the project's goals, requirements, and constraints.
                         3.  **Focus on Planning**: Concentrate on defining the project's objectives and specifications. You are not responsible for writing any code, but rather for outlining the necessary steps and considerations for successful implementation.
                         4.  **Requirements Specification**: Detail the requirements, including any relevant hardware description languages or high-level synthesis languages, that will be utilized for the FPGA design.
-                        5.  **Comprehensive Coverage**: Avoid generic statements and ensure that your response comprehensively covers the technical aspects provided in the input.
-                        6.  **Self-Contained Response**: Ensure that your response is complete and standalone, suitable for input into another module without the need for external references. If you are refering to something you must include it in the output.
+                        5.  **Avoid generic specifications**: Avoid generic statements and ensure that your response comprehensively covers the technical aspects provided in the input or gathered through searches.
+                        6.  **Avoid non-functional specifications**: Do not include anything that is not related to HDL/HLS coding of the module. In other words, avoid time-lines, reliaility, scalability and such
+                        7.  **Self-Contained Response**: Ensure that your response is complete and standalone, suitable for input into another module without the need for external references. If you are refering to something you must include it in the output.
 
                         Your response should be structured as follows:
 
                         *   **Goals**: \[List of goals based on the project's objectives\]
                         *   **Requirements**: \[Detailed requirements, including all technical specifications and instructions provided\]
-                        *   **Constraints**: \[List of constraints, considering the project's limitations and challenges\]""", [])
+                        *   **Constraints**: \[List of constraints, considering the limitations and challenges\]""", ["objective", "agent_scratchpad"])
 
 # Module Generation Agent
 prompt_manager.add_prompt("ModuleAgentExecutor", """Generate a list of necessary modules and their descriptions for the FPGA based hardware design project.
@@ -80,6 +82,7 @@ prompt_manager.add_prompt("ModuleAgentExecutor", """Generate a list of necessary
                         Goals: the main goal(s) of the design
                         Requirements: design requirements
                         Constraints: design constraints
+                        Break: you Must always break down the necessary sub-tasks in markdown format
                         Thought: you should think about satisfying Goals and requirements
                         Thought: you should further refine your thought
                         Thought: you should think about what to do
@@ -163,9 +166,12 @@ prompt_manager.add_prompt("HdlAgentExecutor_v2", """You are an FPGA hardware eng
                         The final solution you prepare must compile into a synthesizable FPGA solution. It is of utmost important that you fully implement the module and do not leave anything to be coded later.
 
                         Some guidelines:
-                        - DO NOT LEAVE THE PERFIPHERAL LOGIC TO THE USER AND FULLY DESIGN IT.
+                        - DO NOT LEAVE ANYTHING TO THE USER AND FULLY DESIGN A SYNTHESIZABLE CODE USING THE TOOLS.
+                        - DO NOT leave any placeholders for the user. fill everything out and take advantage of the tools you have access to.
+                        - IF you need to perform any analysis or computations, check the tools for guidelines.
                         - When using document search, you might have to use the tool multiple times and with various search terms in order to get better resutls.
                         - Leave sufficient amount of comments in the code to enable further development and debugging.
+                        - Make sure that you go always through the "Break" step in the following
 
                         You have access to the following tools:
 
@@ -179,7 +185,8 @@ prompt_manager.add_prompt("HdlAgentExecutor_v2", """You are an FPGA hardware eng
                         Module list: list of modules you will build
                         Module Codes: HDL/HLS code for the modules that you have already built
                         Module: The module that you are currently building
-                        Thought: you MUST always look for code examples and potential readily available solutions through an Action
+                        Break: you Must always break down the necessary sub-tasks in markdown format
+                        Thought: you MUST always think of an Action either to learn about doing something or to find examples
                         Action: the action to take, should be one of [{tool_names}]
                         Action Input: the input to the action
                         Observation: the result of the action
