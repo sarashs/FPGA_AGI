@@ -1,4 +1,6 @@
 import os
+import io
+from contextlib import redirect_stdout
 from langchain.agents import Tool
 from langchain import SerpAPIWrapper
 from langchain.embeddings.openai import OpenAIEmbeddings
@@ -75,9 +77,22 @@ code_search_tool = Tool(
 ### Math tool
 python_repl = PythonREPL()
 
+
 def python_run(input_dict: str):
-    # This is to take care of markdown formatting
-    return python_repl.run(extract_codes_from_string(input_dict)) 
+    if 'print' in input_dict:
+        pass
+    else:
+        return "Your code is not printing the results."
+    global_scope = {"__builtins__": __builtins__}
+    output_buffer = io.StringIO()
+    try:
+        with redirect_stdout(output_buffer):
+            exec(extract_codes_from_string(input_dict), global_scope)
+        return output_buffer.getvalue()
+    except Exception as e:
+        return str(e)
+    finally:
+        output_buffer.close()
 
 llm_math_tool = Tool(
     name="python_repl",

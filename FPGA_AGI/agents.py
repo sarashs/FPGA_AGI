@@ -20,14 +20,14 @@ from FPGA_AGI.chains import TestBenchCreationChain
 class RequirementAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        prefix = prompt_manager("RequirementAgentExecutor_v2").prompt
+        prefix = prompt_manager("RequirementAgentExecutor_v4").prompt
         suffix = """Question: {objective}
         {agent_scratchpad}"""
         prompt = ZeroShotAgent.create_prompt(
             tools, 
             prefix=prefix, 
             suffix=suffix, 
-            input_variables=prompt_manager("RequirementAgentExecutor_v2").input_vars
+            input_variables=prompt_manager("RequirementAgentExecutor_v4").input_vars
         )
         llm_chain = LLMChain(llm=llm, prompt=prompt)
         tool_names = [tool.name for tool in tools]
@@ -80,14 +80,14 @@ class CustomOutputParser(AgentOutputParser):
 class ModuleAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        module_agent_template = prompt_manager("ModuleAgentExecutor").prompt
+        module_agent_template = prompt_manager("ModuleAgentExecutor_v3").prompt
 
         prompt = CustomPromptTemplate(
             template=module_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("ModuleAgentExecutor").input_vars
+            input_variables=prompt_manager("ModuleAgentExecutor_v3").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
@@ -104,14 +104,14 @@ class ModuleAgentExecutor(AgentExecutor):
 class HdlAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        hdl_agent_template = prompt_manager("HdlAgentExecutor_v2").prompt
+        hdl_agent_template = prompt_manager("HdlAgentExecutor_v3").prompt
 
         prompt = CustomPromptTemplate(
             template=hdl_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("HdlAgentExecutor_v2").input_vars
+            input_variables=prompt_manager("HdlAgentExecutor_v3").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
@@ -150,14 +150,14 @@ class FPGA_AGI(BaseModel):
     @classmethod
     def from_llm(cls, llm, verbose=False):
         tools = [
-            #web_search_tool,
+            #llm_math_tool,
             think_again_tool,
             document_search_tool,
             #human_input_tool
         ]
         requirement_agent_executor = RequirementAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
         tools = [
-            #web_search_tool,
+            llm_math_tool,
             think_again_tool,
             document_search_tool,
         ]

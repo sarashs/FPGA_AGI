@@ -64,9 +64,9 @@ def extract_project_details(text):
     goals, requirements, constraints = "", "", ""
     current_section = None
     sections = {
-        re.compile(r"\**\s*\bGoals\b\s*:*", re.IGNORECASE): "goals",
-        re.compile(r"\**\s*\bRequirements\b\s*:*", re.IGNORECASE): "requirements",
-        re.compile(r"\**\s*\bConstraints\b\s*:*", re.IGNORECASE): "constraints"
+        re.compile(r"[\*\+\-\s]*\bGoals\b\s*:*", re.IGNORECASE): "goals",
+        re.compile(r"[\*\+\-\s]*\bRequirements\b\s*:*", re.IGNORECASE): "requirements",
+        re.compile(r"[\*\+\-\s]*\bConstraints\b\s*:*", re.IGNORECASE): "constraints"
     }
     for line in lines:
         for section_regex in sections:
@@ -77,11 +77,11 @@ def extract_project_details(text):
 
         if current_section:
             if current_section == "goals":
-                goals += line.strip() + " "
+                goals += line + "\n"
             elif current_section == "requirements":
-                requirements += line.strip() + " "
+                requirements += line + "\n"
             elif current_section == "constraints":
-                constraints += line.strip() + " "
+                constraints += line + "\n"
 
     return ProjectDetails(goals.strip(), requirements.strip(), constraints.strip())
 
