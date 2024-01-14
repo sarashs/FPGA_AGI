@@ -80,14 +80,14 @@ class CustomOutputParser(AgentOutputParser):
 class ModuleAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        module_agent_template = prompt_manager("ModuleAgentExecutor_v3").prompt
+        module_agent_template = prompt_manager("ModuleAgentExecutor_v4").prompt
 
         prompt = CustomPromptTemplate(
             template=module_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("ModuleAgentExecutor_v3").input_vars
+            input_variables=prompt_manager("ModuleAgentExecutor_v4").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
@@ -104,14 +104,14 @@ class ModuleAgentExecutor(AgentExecutor):
 class HdlAgentExecutor(AgentExecutor):
     @classmethod
     def from_llm_and_tools(cls, llm, tools, verbose=True):
-        hdl_agent_template = prompt_manager("HdlAgentExecutor_v3").prompt
+        hdl_agent_template = prompt_manager("HdlAgentExecutor_v4").prompt
 
         prompt = CustomPromptTemplate(
             template=hdl_agent_template,
             tools=tools,
             # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
             # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("HdlAgentExecutor_v3").input_vars
+            input_variables=prompt_manager("HdlAgentExecutor_v4").input_vars
         )
 
         tool_names = [tool.name for tool in tools]
@@ -138,6 +138,7 @@ class FPGA_AGI(BaseModel):
     mod_codes: List = []
     test_benches: List = []
     module_list_str: List = []
+    requirement : str = ''
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -150,9 +151,10 @@ class FPGA_AGI(BaseModel):
     @classmethod
     def from_llm(cls, llm, verbose=False):
         tools = [
-            #llm_math_tool,
+            llm_math_tool,
             think_again_tool,
             document_search_tool,
+            web_search_tool,
             #human_input_tool
         ]
         requirement_agent_executor = RequirementAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
@@ -160,6 +162,7 @@ class FPGA_AGI(BaseModel):
             llm_math_tool,
             think_again_tool,
             document_search_tool,
+            web_search_tool,
         ]
         module_agent_executor = ModuleAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
         tools = [
@@ -175,20 +178,21 @@ class FPGA_AGI(BaseModel):
 
     def _run(self, objective, action_type):
         if action_type == 'full':
-            requirement = self.requirement_agent_executor.run(objective)
-            self.project_details = extract_project_details(requirement)
+            self.requirement = self.requirement_agent_executor.run(objective)
+            self.project_details = extract_project_details(self.requirement)
         elif action_type == 'module':
             assert type(objective) == ProjectDetails, "objective needs to be of ProjectDetails type for module level design"
             self.project_details = objective
         if action_type == 'hdl':
             try:
                 self.module_list = [json.loads(objective)]
-                self.project_details = ProjectDetails(goals=f"design the specified module: \n {objective}",requirements="no specific requirements",constraints="no specific constraints")
+                self.project_details = ProjectDetails(goals=f"design the specified module: \n {objective}",requirements="no specific requirements",Tree="no specific tree")
             except json.JSONDecodeError as e:
                 raise FormatError
         else:
-            self.module_list = self.module_agent_executor.run(Goals=self.project_details.goals, Requirements=self.project_details.requirements, Constraints=self.project_details.constraints)
+            self.module_list = self.module_agent_executor.run(Goals=self.project_details.goals, Requirements=self.project_details.requirements, Tree=self.project_details.tree)
             self.module_list = extract_json_from_string(self.module_list)
+        #print(self.requirement)
         self.mod_codes = []
         self.codes = []
         self.test_benches = []
@@ -198,7 +202,7 @@ class FPGA_AGI(BaseModel):
             code = self.hdl_agent_executor.run(
                 Goals=self.project_details.goals,
                 Requirements=self.project_details.requirements,
-                Constraints=self.project_details.constraints,
+                Tree=self.project_details.tree,
                 module_list='\n'.join(self.module_list_str),
                 codes='\n'.join(self.codes),
                 module=str(module)
@@ -208,7 +212,7 @@ class FPGA_AGI(BaseModel):
         #    tb = self.test_bench_creator.run(
         #        Goals=self.project_details.goals,
         #        Requirements=self.project_details.requirements,
-        #        Constraints=self.project_details.constraints,
+        #        tree=self.project_details.tree,
         #        module_list='\n'.join(self.module_list_str),
         #        module=code                
         #    )

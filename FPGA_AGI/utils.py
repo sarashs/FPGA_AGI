@@ -32,14 +32,14 @@ class FormatError(Exception):
 class ProjectDetails:
     goals: str
     requirements: str
-    constraints: str
+    tree: str
 
     def save_to_file(self, solution_num):
         dir_path = f'./solution_{solution_num}/'
         with open(os.path.join(dir_path, "GRC.md"), "w+") as file:
             file.write(f"Goals:\n{self.goals}\n\n")
             file.write(f"Requirements:\n{self.requirements}\n\n")
-            file.write(f"Constraints:\n{self.constraints}\n")
+            file.write(f"tree:\n{self.tree}\n")
 
 def fix_json_escapes(json_string):
     # Replace invalid escape sequences
@@ -61,12 +61,12 @@ def extract_json_from_string(string):
 
 def extract_project_details(text):
     lines = text.split('\n')
-    goals, requirements, constraints = "", "", ""
+    goals, requirements, tree = "", "", ""
     current_section = None
     sections = {
         re.compile(r"[\*\+\-\s]*\bGoals\b\s*:*", re.IGNORECASE): "goals",
         re.compile(r"[\*\+\-\s]*\bRequirements\b\s*:*", re.IGNORECASE): "requirements",
-        re.compile(r"[\*\+\-\s]*\bConstraints\b\s*:*", re.IGNORECASE): "constraints"
+        re.compile(r"[\*\+\-\s]*\btree\b\s*:*", re.IGNORECASE): "tree"
     }
     for line in lines:
         for section_regex in sections:
@@ -80,10 +80,10 @@ def extract_project_details(text):
                 goals += line + "\n"
             elif current_section == "requirements":
                 requirements += line + "\n"
-            elif current_section == "constraints":
-                constraints += line + "\n"
+            elif current_section == "tree":
+                tree += line + "\n"
 
-    return ProjectDetails(goals.strip(), requirements.strip(), constraints.strip())
+    return ProjectDetails(goals.strip(), requirements.strip(), tree.strip())
 
 def lang2suffix(lang):
   if lang.lower() in ["systemverilog", "system verilog", "system_verilog", "system-verilog", "sv"]:
