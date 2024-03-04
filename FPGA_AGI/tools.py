@@ -99,15 +99,6 @@ llm_math_tool = Tool(
     description="A Python shell. Use this to execute python commands. Input should be a valid python command. You can use this tool for math computations of any kind in python. If you want to see the output of a value, you should print it out with `print(...)`.",
     func=python_run,
 )
-
-### Web search tool
-search = SerpAPIWrapper()
-web_search_tool = Tool(
-        name = "Web_Search",
-        func= search.run,
-        description="useful for when you need to perform an internet search to answer questions or investigate online resources."
-    )
-
 ### Human tool
 def get_input() -> str:
     print("Insert your text. Enter 'q' or press Ctrl-D (or Ctrl-Z on Windows) to end.")
@@ -126,36 +117,3 @@ human_input_tool = HumanInputRun(input_func=get_input)
 #human_input_tool.description = "You can ask a human for guidance when you think you got stuck or you are not sure what to do next."
 #" The input should be a specific question for the human."
 
-### File writing tool
-
-def save_file(input_dict: str):
-    assert isinstance(input_dict, str), "input is not a string"
-    colon_index = input_dict.find(">>>")
-    # Extract file_name and file
-    key = input_dict[:colon_index].strip()
-    value = input_dict[colon_index + 1:].strip()
-    # Trim whitespace
-    file_name = key.strip()
-    file = value.strip()
-    directory = "solution"
-    path = os.path.join(os.getcwd(), directory)
-    if not os.path.exists(path):
-        os.makedirs(path)
-    file_name = file_name
-    file_path = os.path.join(path, file_name)
-    try:
-        with open(file_path, 'a+') as f:
-            f.write(file)
-    except:
-        warnings.warn("The input format to the Save tool has an issue. Saving eveyrhing.")
-        with open(os.path.join(path, 'design_tool_problematic.json'), 'a+') as f:
-            f.write(file)
-file_save_tool = Tool(name = "Save",
-                      func=save_file,
-                      description="useful for when you need to save a file. The input to this tool is a string with the following format: File_name_and_extension >>> content \n Example: \"output.json >>> {{key: value}}\" \n file extentions can include .v .cpp .sv .hdl .md"
-                      )
-def DUD(input_dict: str):
-    return f'your thought is: {input_dict}'
-think_again_tool = Tool(name = "Think",
-                        func=DUD,
-                        description="useful when you need to think more. This tool returns your own thought that you pass as input to the tool and cannot answer a question.")

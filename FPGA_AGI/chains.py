@@ -1,19 +1,32 @@
-#from typing import Dict, List, Optional, Any
-#from pydantic import BaseModel, Field
-from langchain import OpenAI, LLMChain, PromptTemplate
-#from langchain.prompts.few_shot import FewShotPromptTemplate
-from langchain.llms import BaseLLM
-from FPGA_AGI.prompts import prompt_manager
+from langchain_core.runnables import Runnable
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.chains.openai_functions import create_structured_output_runnable
+from typing import Dict, List, Optional, Any, Union
+from FPGA_AGI.prompts import requirement_prompt
 
-class TestBenchCreationChain(LLMChain):
-    """Chain to generate testbench."""
+class Requirements(BaseModel):
+    """Project requirements"""
 
+    goals: List[str] = Field(
+        description="List of goals based on the project's objectives"
+    )
+
+    requirements: List[str] = Field(
+        description="List of requirements including all technical specifications and instructions provided"
+    )
+
+    lang: str = Field(
+        description="HDL/HLS language to be used"
+    )
+
+#requirement_runnable = create_structured_output_runnable(
+#    Requirements, bigllm, requirement_prompt
+#)
+
+class RequirementChain(Runnable):
     @classmethod
-    def from_llm(cls, llm: BaseLLM, verbose: bool = True) -> LLMChain:
-        """Get the response parser."""
-        task_creation_template = prompt_manager("TestBenchCreationChain").prompt
-        prompt = PromptTemplate(
-            template=task_creation_template,
-            input_variables=prompt_manager("TestBenchCreationChain").input_vars,
+    def from_llm(cls, llm):
+        requirement_runnable = create_structured_output_runnable(
+            Requirements, llm, requirement_prompt
         )
-        return cls(prompt=prompt, llm=llm, verbose=verbose)
+        return requirement_runnable
