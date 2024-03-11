@@ -1,235 +1,162 @@
-import re
-from typing import Dict, List, Optional, Any, Union
-from time import sleep
+from FPGA_AGI.tools import search_web, python_run, Thought
+import json
+from langgraph.prebuilt import ToolExecutor
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.utils.function_calling import convert_to_openai_function
+from langchain_openai import ChatOpenAI
+from typing import TypedDict, Annotated, Sequence, List
+import operator
+from langchain_core.messages import BaseMessage
+from langgraph.prebuilt import ToolInvocation
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import HumanMessage, SystemMessage, FunctionMessage
 
-from langchain.agents import ZeroShotAgent, Tool, AgentExecutor, LLMSingleActionAgent, AgentOutputParser
-from langchain import OpenAI, LLMChain, PromptTemplate
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.llms import BaseLLM
-from pydantic import BaseModel, Field
-from langchain.schema import AgentAction, AgentFinish, OutputParserException
-from langchain.prompts import StringPromptTemplate
-import warnings
-import shutil
+class Module(BaseModel):
+    """module definition"""
+    name: str = Field(description="Name of the module.")
+    description: str = Field(description="Module description.")
+    connections: List[str] = Field(description="List of the modules connecting to this module.")
+    ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
+    notes: str = Field(description="Any points, notes, information or computations necessary for the implementation of module.")
 
-from FPGA_AGI.tools import *
-from FPGA_AGI.utils import *
-from FPGA_AGI.prompts import *
-from FPGA_AGI.chains import TestBenchCreationChain
-
-class RequirementAgentExecutor(AgentExecutor):
-    @classmethod
-    def from_llm_and_tools(cls, llm, tools, verbose=True):
-        prefix = prompt_manager("RequirementAgentExecutor_v4").prompt
-        suffix = """Question: {objective}
-        {agent_scratchpad}"""
-        prompt = ZeroShotAgent.create_prompt(
-            tools, 
-            prefix=prefix, 
-            suffix=suffix, 
-            input_variables=prompt_manager("RequirementAgentExecutor_v4").input_vars
-        )
-        llm_chain = LLMChain(llm=llm, prompt=prompt)
-        tool_names = [tool.name for tool in tools]
-        agent = ZeroShotAgent(llm_chain=llm_chain, allowed_tools=tool_names)
-        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose, handle_parsing_errors=True)
-
-class CustomPromptTemplate(StringPromptTemplate):
-    # The template to use
-    template: str
-    # The list of tools available
-    tools: List[Tool]
-
-    def format(self, **kwargs) -> str:
-        # Get the intermediate steps (AgentAction, Observation tuples)
-        # Format them in a particular way
-        intermediate_steps = kwargs.pop("intermediate_steps")
-        thoughts = ""
-        for action, observation in intermediate_steps:
-            thoughts += action.log
-            thoughts += f"\nObservation: {observation}\nThought: "
-        # Set the agent_scratchpad variable to that value
-        kwargs["agent_scratchpad"] = thoughts
-        # Create a tools variable from the list of tools provided
-        kwargs["tools"] = "\n".join([f"{tool.name}: {tool.description}" for tool in self.tools])
-        # Create a list of tool names for the tools provided
-        kwargs["tool_names"] = ", ".join([tool.name for tool in self.tools])
-        return self.template.format(**kwargs)
-
-class CustomOutputParser(AgentOutputParser):
-
-    def parse(self, llm_output: str) -> Union[AgentAction, AgentFinish]:
-        # Check if agent should finish
-        if "Final Answer:" in llm_output:
-            return AgentFinish(
-                # Return values is generally always a dictionary with a single `output` key
-                # It is not recommended to try anything else at the moment :)
-                return_values={"output": llm_output.split("Final Answer:")[-1].strip()},
-                log=llm_output,
-            )
-        # Parse out the action and action input
-        regex = r"Action\s*\d*\s*:(.*?)\nAction\s*\d*\s*Input\s*\d*\s*:[\s]*(.*)"
-        match = re.search(regex, llm_output, re.DOTALL)
-        if not match:
-            raise OutputParserException(f"Could not parse LLM output: `{llm_output}`")
-        action = match.group(1).strip()
-        action_input = match.group(2)
-        # Return the action and action input
-        return AgentAction(tool=action, tool_input=action_input.strip(" ").strip('"'), log=llm_output)
-
-class ModuleAgentExecutor(AgentExecutor):
-    @classmethod
-    def from_llm_and_tools(cls, llm, tools, verbose=True):
-        module_agent_template = prompt_manager("ModuleAgentExecutor_v4").prompt
-
-        prompt = CustomPromptTemplate(
-            template=module_agent_template,
-            tools=tools,
-            # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
-            # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("ModuleAgentExecutor_v4").input_vars
+class HierarchicalResponse(BaseModel):
+    """Final response to the user"""
+    graph: List[Module] = Field(
+        description="""List of modules"""
         )
 
-        tool_names = [tool.name for tool in tools]
-        output_parser = CustomOutputParser()
-        llm_chain = LLMChain(llm=llm, prompt=prompt)
-        agent = LLMSingleActionAgent(
-            llm_chain=llm_chain,
-            output_parser=output_parser,
-            stop=["\nObservation:"],
-            allowed_tools=tool_names
-        )
-        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose, handle_parsing_errors=True)
+class HierarchicalAgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], operator.add]
     
-class HdlAgentExecutor(AgentExecutor):
-    @classmethod
-    def from_llm_and_tools(cls, llm, tools, verbose=True):
-        hdl_agent_template = prompt_manager("HdlAgentExecutor_v4").prompt
+class HierarchicalDesignAgent(object):
+    """This agent performs a hierarchical design of the desired logic."""
 
-        prompt = CustomPromptTemplate(
-            template=hdl_agent_template,
-            tools=tools,
-            # This omits the `agent_scratchpad`, `tools`, and `tool_names` variables because those are generated dynamically
-            # This includes the `intermediate_steps` variable because that is needed
-            input_variables=prompt_manager("HdlAgentExecutor_v4").input_vars
+    def __init__(self, model: ChatOpenAI, tools: List=[search_web]):
+        tools.append(Thought)
+        self.tool_executor = ToolExecutor(tools)
+        functions = [convert_to_openai_function(t) for t in tools]
+        functions.append(convert_to_openai_function(HierarchicalResponse))
+        self.model = model.bind_functions(functions)
+        # Define a new graph
+        self.workflow = StateGraph(HierarchicalAgentState)
+
+        # Define the two nodes we will cycle between
+        self.workflow.add_node("agent", self.call_model)
+        self.workflow.add_node("action", self.call_tool)
+
+        # Set the entrypoint as `agent`
+        # This means that this node is the first one called
+        self.workflow.set_entry_point("agent")
+
+        # We now add a conditional edge
+        self.workflow.add_conditional_edges(
+            # First, we define the start node. We use `agent`.
+            # This means these are the edges taken after the `agent` node is called.
+            "agent",
+            # Next, we pass in the function that will determine which node is called next.
+            self.should_continue,
+            # Finally we pass in a mapping.
+            # The keys are strings, and the values are other nodes.
+            # END is a special node marking that the graph should finish.
+            # What will happen is we will call `should_continue`, and then the output of that
+            # will be matched against the keys in this mapping.
+            # Based on which one it matches, that node will then be called.
+            {
+                # If `tools`, then we call the tool node.
+                "continue": "action",
+                # Otherwise we finish.
+                "end": END,
+            },
         )
 
-        tool_names = [tool.name for tool in tools]
-        output_parser = CustomOutputParser()
-        llm_chain = LLMChain(llm=llm, prompt=prompt)
-        agent = LLMSingleActionAgent(
-            llm_chain=llm_chain,
-            output_parser=output_parser,
-            stop=["\nObservation:"],
-            allowed_tools=tool_names
-        )
-        return cls.from_agent_and_tools(agent=agent, tools=tools, verbose=verbose, handle_parsing_errors=True)
+        # We now add a normal edge from `tools` to `agent`.
+        # This means that after `tools` is called, `agent` node is called next.
+        self.workflow.add_edge("action", "agent")
 
-class FPGA_AGI(BaseModel):
-    verbose: bool = False
-    solution_num: int = 0
-    requirement_agent_executor: RequirementAgentExecutor = None
-    module_agent_executor: ModuleAgentExecutor = None
-    hdl_agent_executor: HdlAgentExecutor = None
-    project_details: ProjectDetails = None
-    test_bench_creator: TestBenchCreationChain = None
-    module_list: List = []
-    codes: List = []
-    mod_codes: List = []
-    test_benches: List = []
-    module_list_str: List = []
-    requirement : str = ''
+        # Finally, we compile it!
+        # This compiles it into a LangChain Runnable,
+        # meaning you can use it as you would any other runnable
+        self.app = self.workflow.compile()
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        if (self.requirement_agent_executor is None) or (self.module_agent_executor is None) or (self.hdl_agent_executor is None):
-            warnings.warn("RequirementAgentExecutor, ModuleAgentExecutor and HdlAgentExecutor are not set. Please use the from_llm class method to properly initialize it.", UserWarning)
-        dir_path = f'./solution_{self.solution_num}/'
-        if os.path.exists(dir_path) and os.path.isdir(dir_path):
-            shutil.rmtree(dir_path)
-
-    @classmethod
-    def from_llm(cls, llm, verbose=False):
-        tools = [
-            llm_math_tool,
-            think_again_tool,
-            document_search_tool,
-            web_search_tool,
-            #human_input_tool
-        ]
-        requirement_agent_executor = RequirementAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
-        tools = [
-            llm_math_tool,
-            think_again_tool,
-            document_search_tool,
-            web_search_tool,
-        ]
-        module_agent_executor = ModuleAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
-        tools = [
-            #web_search_tool,
-            llm_math_tool,
-            code_search_tool,
-            document_search_tool,
-            think_again_tool,
-        ]
-        hdl_agent_executor = HdlAgentExecutor.from_llm_and_tools(llm=llm, tools=tools, verbose=verbose)
-        test_bench_creator = TestBenchCreationChain.from_llm(llm=llm, verbose=verbose)
-        return cls(verbose=verbose, requirement_agent_executor=requirement_agent_executor, module_agent_executor=module_agent_executor, hdl_agent_executor=hdl_agent_executor, test_bench_creator=test_bench_creator)
-
-    def _run(self, objective, action_type):
-        if action_type == 'full':
-            self.requirement = self.requirement_agent_executor.run(objective)
-            self.project_details = extract_project_details(self.requirement)
-        elif action_type == 'module':
-            assert type(objective) == ProjectDetails, "objective needs to be of ProjectDetails type for module level design"
-            self.project_details = objective
-        if action_type == 'hdl':
-            try:
-                self.module_list = [json.loads(objective)]
-                self.project_details = ProjectDetails(goals=f"design the specified module: \n {objective}",requirements="no specific requirements",Tree="no specific tree")
-            except json.JSONDecodeError as e:
-                raise FormatError
+    def should_continue(self, state):
+        messages = state["messages"]
+        last_message = messages[-1]
+        # If there is no function call, then we finish
+        if "function_call" not in last_message.additional_kwargs:
+            return "end"
+        # Otherwise if there is, we need to check what type of function call it is
+        elif last_message.additional_kwargs["function_call"]["name"] == "HierarchicalResponse":
+            return "end"
+        # Otherwise we continue
         else:
-            self.module_list = self.module_agent_executor.run(Goals=self.project_details.goals, Requirements=self.project_details.requirements, Tree=self.project_details.tree)
-            self.module_list = extract_json_from_string(self.module_list)
-        #print(self.requirement)
-        self.mod_codes = []
-        self.codes = []
-        self.test_benches = []
-        self.module_list_str = [str(item) for item in self.module_list]
-        #current_modules_verified = json.loads(current_modules_verified)
-        for module in self.module_list:
-            code = self.hdl_agent_executor.run(
-                Goals=self.project_details.goals,
-                Requirements=self.project_details.requirements,
-                Tree=self.project_details.tree,
-                module_list='\n'.join(self.module_list_str),
-                codes='\n'.join(self.codes),
-                module=str(module)
-                )
-            sleep(5)
-# TODO: Uncomment the testbench generation and save lines if need be
-        #    tb = self.test_bench_creator.run(
-        #        Goals=self.project_details.goals,
-        #        Requirements=self.project_details.requirements,
-        #        tree=self.project_details.tree,
-        #        module_list='\n'.join(self.module_list_str),
-        #        module=code                
-        #    )
-        #    self.test_benches.append(tb)
-            self.codes.append(extract_codes_from_string(code))
-            self.mod_codes.append((module, extract_codes_from_string(code)))
-        save_solution(self.mod_codes, solution_num=self.solution_num)
-        #save_solution(self.test_benches, solution_num=self.solution_num)
-        self.project_details.save_to_file(solution_num=self.solution_num)
-        self.solution_num += 1
-        dir_path = f'./solution_{self.solution_num}/'
-        if os.path.exists(dir_path) and os.path.isdir(dir_path):
-            shutil.rmtree(dir_path)
+            return "continue"
 
-    def __call__(self, objective: Any, action_type: str = 'full'):
-        if (self.requirement_agent_executor is None) or (self.module_agent_executor is None) or (self.hdl_agent_executor is None):
-            raise Exception("RequirementAgentExecutor, ModuleAgentExecutor and HdlAgentExecutor are not set. Please use the from_llm class method to properly initialize it.")
-        if not (action_type in ['full', 'module', 'hdl']):
-            raise ValueError("Invalid action type specified.")
-        self._run(objective, action_type)
+    # Define the function that calls the model
+    def call_model(self, state):
+        messages = state["messages"]
+        response = self.model.invoke(messages)
+        # We return a list, because this will get added to the existing list
+        return {"messages": [response]}
+
+    # Define the function to execute tools
+    def call_tool(self, state):
+        messages = state["messages"]
+        # Based on the continue condition
+        # we know the last message involves a function call
+        last_message = messages[-1]
+        # We construct an ToolInvocation from the function_call
+        print(last_message.additional_kwargs["function_call"]["name"])
+        action = ToolInvocation(
+            tool=last_message.additional_kwargs["function_call"]["name"],
+            tool_input=json.loads(
+                last_message.additional_kwargs["function_call"]["arguments"]
+            ),
+        )
+        # We call the tool_executor and get back a response
+        response = self.tool_executor.invoke(action)
+        # We use the response to create a FunctionMessage
+        function_message = FunctionMessage(content=str(response), name=action.tool)
+        # We return a list, because this will get added to the existing list
+        if last_message.additional_kwargs["function_call"]["name"] != 'Thought':
+            return {"messages": [function_message]}
+        else:
+            return
+
+    def prompt(self, goals, requirements):
+        return ({"messages": [SystemMessage(content=f"""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project.
+            You are deciding on the module names, description, ports, what modules each module is connected to. You also include notes on anything that may be necessary in order for the downstream logic designers.
+            - You must expand your knowledge on the subject matter via the seach tool before committing to a response.
+            - You are not responsible for designing a test bench.
+            - If you are defining a top module or any other hierarchy, you must mention that in the module description.
+
+            Use the following format:
+
+            Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
+            Action: the action to take, should be one of the functions you have access to.
+            ... (this Thought/Action can repeat 3 times)
+            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
+            HumanMessage(content=f"""Design the architecture graph for the following goals and requirements.
+
+                Goals:
+                {goals}
+                
+                Requirements:
+                {requirements}
+                """)]})
+
+    def invoke(self, goals, requirements):
+        inputs = self.prompt(goals, requirements)
+        output = self.app.invoke(inputs)
+        out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
+        out = HierarchicalResponse.parse_obj(out)
+        return out
+
+    def stream(self, goals, requirements):
+        inputs = self.prompt(goals, requirements)
+        for output in self.app.stream(inputs):
+        # stream() yields dictionaries with output keyed by node name
+            for key, value in output.items():
+                print(f"Output from node '{key}':")
+                print("---")
+                print(value)
+                print("\n---\n")
