@@ -1,4 +1,13 @@
-from FPGA_AGI.tools import search_web, python_run, Thought
+try:
+    from FPGA_AGI.tools import search_web, python_run, Thought
+except ModuleNotFoundError:
+    from tools import search_web, python_run, Thought
+
+try:
+    from FPGA_AGI.prompts import hierarchical_agent_prompt
+except ModuleNotFoundError:
+    from prompts import hierarchical_agent_prompt
+
 import json
 from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
@@ -6,10 +15,9 @@ from langchain_core.utils.function_calling import convert_to_openai_function
 from langchain_openai import ChatOpenAI
 from typing import TypedDict, Annotated, Sequence, List
 import operator
-from langchain_core.messages import BaseMessage
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, SystemMessage, FunctionMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
 
 class Module(BaseModel):
     """module definition"""
@@ -145,14 +153,14 @@ class HierarchicalDesignAgent(object):
                 """)]})
 
     def invoke(self, goals, requirements):
-        inputs = self.prompt(goals, requirements)
+        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
         output = self.app.invoke(inputs)
         out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
         out = HierarchicalResponse.parse_obj(out)
         return out
 
     def stream(self, goals, requirements):
-        inputs = self.prompt(goals, requirements)
+        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
         for output in self.app.stream(inputs):
         # stream() yields dictionaries with output keyed by node name
             for key, value in output.items():
@@ -160,3 +168,38 @@ class HierarchicalDesignAgent(object):
                 print("---")
                 print(value)
                 print("\n---\n")
+
+if __name__ == "__main__":
+    from pprint import pprint   
+
+    #gpt-4-0125-preview
+    model = ChatOpenAI(model='gpt-4-1106-preview', temperature=0, streaming=True)
+
+    tools = [search_web]
+
+    agent = HierarchicalDesignAgent(model, tools)
+
+    hierarchical_response = agent.invoke('Design an 8-bit RISC V processor using SystemVerilog.', ['1. The processor must be designed based on the RISC V instruction set and '
+                                            'should follow a Harvard-type data path structure.',
+                                            '2. Implement memory access instructions including Load Word (LD) and Store '
+                                            'Word (ST) with the specified operations.',
+                                            '3. Implement data processing instructions including Add (ADD), Subtract '
+                                            '(SUB), Invert (INV), Logical Shift Left (LSL), Logical Shift Right (LSR), '
+                                            'Bitwise AND (AND), Bitwise OR (OR), and Set on Less Than (SLT) with the '
+                                            'specified operations.',
+                                            '4. Implement control flow instructions including Branch on Equal (BEQ), '
+                                            'Branch on Not Equal (BNE), and Jump (JMP) with the specified operations.',
+                                            '5. Design the processor control unit to generate appropriate control signals '
+                                            'for each instruction type.',
+                                            '6. Design the ALU control unit to generate the correct ALU operation based '
+                                            'on the ALUOp signal and the opcode.',
+                                            '7. Implement instruction memory, data memory, register file, ALU, ALU '
+                                            'control unit, datapath unit, and control unit modules in SystemVerilog.',
+                                            '8. Ensure the processor supports a 16-bit instruction format and operates on '
+                                            '8-bit data widths.',
+                                            '9. The processor must be capable of executing the provided instruction set '
+                                            'with correct control and data flow for each instruction type.',
+                                            '10. Verify the processor design using a testbench that simulates various '
+                                            'instruction executions and validates the functionality of the processor.']
+                                            )
+    print(hierarchical_response)

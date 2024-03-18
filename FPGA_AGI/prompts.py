@@ -1,4 +1,5 @@
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
 
 requirement_prompt = ChatPromptTemplate.from_messages(
     [
@@ -21,3 +22,29 @@ requirement_prompt = ChatPromptTemplate.from_messages(
         ("user", "Objective:\n {objective} \n\n Context: \n {context}"),
     ]
 )
+#####
+hierarchical_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the architecture graph for the following goals and requirements.
+
+                Goals:
+                {goals}
+                
+                Requirements:
+                {requirements}
+                """)
+
+hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
+    [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project.
+            You are deciding on the module names, description, ports, what modules each module is connected to. You also include notes on anything that may be necessary in order for the downstream logic designers.
+            - You must expand your knowledge on the subject matter via the seach tool before committing to a response.
+            - You are not responsible for designing a test bench.
+            - If you are defining a top module or any other hierarchy, you must mention that in the module description.
+
+            Use the following format:
+
+            Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
+            Action: the action to take, should be one of the functions you have access to.
+            ... (this Thought/Action can repeat 3 times)
+            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""), hierarchical_agent_prompt_human
+]
+)
+#####
