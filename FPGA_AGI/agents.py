@@ -174,28 +174,38 @@ class ResearcherAgent(object):
         self.workflow.add_node("generate_query", self.generate_query)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
-        self.workflow.add_node("decide_to_generate", self.decide_to_generate)
+        self.workflow.add_node("evaluate_results", self.relevance_grade)
         self.workflow.add_node("generate_excerpts", self.generate_excerpts) 
         self.workflow.add_node("search_web", self.search_web)
 
         # Build graph
-        self.workflow.set_entry_point("retrieve")
-        self.workflow.add_edge("retrieve", "grade_documents")
+        self.workflow.set_entry_point("generate_query")
+        self.workflow.add_edge("generate_query", "retrieve_documents")
+        self.workflow.add_edge("retrieve_documents", "relevance_grade")
         self.workflow.add_conditional_edges(
-            "grade_documents",
-            decide_to_generate,
+            "relevance_grade",
+            self.decide_to_websearch,
             {
-                "transform_query": "transform_query",
-                "generate": "generate",
+                "search_web": "search_web",
+                "evaluate_results": "evaluate_results",
             },
         )
-        self.workflow.add_edge("transform_query", "web_search")
-        self.workflow.add_edge("web_search", "generate")
-        self.workflow.add_edge("generate", END)
+        self.workflow.add_edge("search_web", "evaluate_results")
+        self.workflow.add_conditional_edges(
+            "evaluate_results",
+            self.decide_to_generate,
+            {
+                "generate_query": "generate_query",
+                "generate_excerpts": "generate_excerpts",
+            },
+        )
+        self.workflow.add_edge("evaluate_results", "generate")
+        self.workflow.add_edge("generate_excerpts", END)
 
         # Compile
-        app = self.workflow.compile() 
+        self.app = self.workflow.compile() 
 
+    # States
     def generate_query(self, state):
         pass
 
@@ -208,10 +218,17 @@ class ResearcherAgent(object):
     def search_web(self, state):
         pass
 
-    def decide_to_generate(self, state):
+    def evaluate_results(self, state):
         pass
 
     def generate_excerpts(self, state):
+        pass
+
+    #conditions
+    def decide_to_generate(self, state):
+        pass
+
+    def decide_to_websearch(self, state):
         pass
 
 if __name__ == "__main__":
