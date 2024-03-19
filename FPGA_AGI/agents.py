@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_core.utils.function_calling import convert_to_openai_function
 from langchain_openai import ChatOpenAI
-from typing import TypedDict, Annotated, Sequence, List
+from typing import TypedDict, Annotated, Sequence, List, Dict
 import operator
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
@@ -130,28 +130,6 @@ class HierarchicalDesignAgent(object):
         else:
             return
 
-    def prompt(self, goals, requirements):
-        return ({"messages": [SystemMessage(content=f"""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project.
-            You are deciding on the module names, description, ports, what modules each module is connected to. You also include notes on anything that may be necessary in order for the downstream logic designers.
-            - You must expand your knowledge on the subject matter via the seach tool before committing to a response.
-            - You are not responsible for designing a test bench.
-            - If you are defining a top module or any other hierarchy, you must mention that in the module description.
-
-            Use the following format:
-
-            Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
-            Action: the action to take, should be one of the functions you have access to.
-            ... (this Thought/Action can repeat 3 times)
-            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
-            HumanMessage(content=f"""Design the architecture graph for the following goals and requirements.
-
-                Goals:
-                {goals}
-                
-                Requirements:
-                {requirements}
-                """)]})
-
     def invoke(self, goals, requirements):
         inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
         output = self.app.invoke(inputs)
@@ -168,6 +146,73 @@ class HierarchicalDesignAgent(object):
                 print("---")
                 print(value)
                 print("\n---\n")
+
+class ResearcherResponse(BaseModel):
+    """Final response to the user"""
+    web_results: str = Field(description="""Useful results from the web""")
+    document_results: str = Field(description="""Useful results from the document database""")
+    code_output: str = Field(description="""Any code execution results that may be useful for the design""")
+    solution_approach: str = Field(description="""Description of the solution approach""")
+
+class ResearcherAgentState(TypedDict):
+    """
+    Represents the state of our graph.
+
+    Attributes:
+        keys: A dictionary where each key is a string.
+    """
+
+    keys: Dict[str, any]
+
+class ResearcherAgent(object):
+    """This agent performs research on the design."""
+
+    def __init__(self, model: ChatOpenAI, tools: List=[search_web]):
+        self.workflow = StateGraph(ResearcherAgentState)
+
+        # Define the nodes
+        self.workflow.add_node("generate_query", self.generate_query)
+        self.workflow.add_node("retrieve_documents", self.retrieve_documents)
+        self.workflow.add_node("relevance_grade", self.relevance_grade)
+        self.workflow.add_node("decide_to_generate", self.decide_to_generate)
+        self.workflow.add_node("generate_excerpts", self.generate_excerpts) 
+        self.workflow.add_node("search_web", self.search_web)
+
+        # Build graph
+        self.workflow.set_entry_point("retrieve")
+        self.workflow.add_edge("retrieve", "grade_documents")
+        self.workflow.add_conditional_edges(
+            "grade_documents",
+            decide_to_generate,
+            {
+                "transform_query": "transform_query",
+                "generate": "generate",
+            },
+        )
+        self.workflow.add_edge("transform_query", "web_search")
+        self.workflow.add_edge("web_search", "generate")
+        self.workflow.add_edge("generate", END)
+
+        # Compile
+        app = self.workflow.compile() 
+
+    def generate_query(self, state):
+        pass
+
+    def retrieve_documents(self, state):
+        pass
+
+    def relevance_grade(self, state):
+        pass
+
+    def search_web(self, state):
+        pass
+
+    def decide_to_generate(self, state):
+        pass
+
+    def generate_excerpts(self, state):
+        pass
 
 if __name__ == "__main__":
     from pprint import pprint   
