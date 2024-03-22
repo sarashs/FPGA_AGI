@@ -11,13 +11,16 @@ except ModuleNotFoundError:
 import json
 from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_core.utils.function_calling import convert_to_openai_function
+from langchain_core.utils.function_calling import convert_to_openai_function, convert_to_openai_tool
 from langchain_openai import ChatOpenAI
-from typing import TypedDict, Annotated, Sequence, List, Dict
+from langchain_core.runnables import RunnablePassthrough
+from typing import TypedDict, Annotated, Sequence, List, Dict, Any
 import operator
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
+from langchain.prompts import PromptTemplate
+from langchain.output_parsers.openai_tools import PydanticToolsParser
 
 class Module(BaseModel):
     """module definition"""
@@ -161,17 +164,19 @@ class ResearcherAgentState(TypedDict):
     Attributes:
         keys: A dictionary where each key is a string.
     """
-
     keys: Dict[str, any]
 
 class ResearcherAgent(object):
     """This agent performs research on the design."""
 
-    def __init__(self, model: ChatOpenAI, tools: List=[search_web]):
+    def __init__(self, model: ChatOpenAI, retriever: Any, tools: List=[search_web]):
+
+        self.retriever = retriever
+        self.model = model
         self.workflow = StateGraph(ResearcherAgentState)
 
         # Define the nodes
-        self.workflow.add_node("generate_query", self.generate_query)
+        self.workflow.add_node("researcher", self.researcher)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
         self.workflow.add_node("evaluate_results", self.relevance_grade)
@@ -179,8 +184,8 @@ class ResearcherAgent(object):
         self.workflow.add_node("search_web", self.search_web)
 
         # Build graph
-        self.workflow.set_entry_point("generate_query")
-        self.workflow.add_edge("generate_query", "retrieve_documents")
+        self.workflow.set_entry_point("researcher")
+        self.workflow.add_edge("researcher", "retrieve_documents")
         self.workflow.add_edge("retrieve_documents", "relevance_grade")
         self.workflow.add_conditional_edges(
             "relevance_grade",
@@ -195,7 +200,7 @@ class ResearcherAgent(object):
             "evaluate_results",
             self.decide_to_generate,
             {
-                "generate_query": "generate_query",
+                "researcher": "researcher",
                 "generate_excerpts": "generate_excerpts",
             },
         )
@@ -206,14 +211,90 @@ class ResearcherAgent(object):
         self.app = self.workflow.compile() 
 
     # States
-    def generate_query(self, state):
-        pass
+    def researcher(self, state):
+        """
+        manage the data collection/computation process
+
+        Args:
+            state (dict): The current graph state
+
+        Returns:
+            state (dict): New key added to state, documents, that contains retrieved documents
+        """
+        class decision(BaseModel):
+            """Decision regarding the next step of the process"""
+
+            decision: str = Field(description="Decision 'search' or 'compute' or 'solution'")
+            code: str = Field(description="If decision compute, python code to be executed; else, NA.")
+            query: str = Field(description="If decision search, query to be searched; else, NA.")
+            solution: str = Field(description="If decision solution, solution approach for the current problem; else, NA.")
 
     def retrieve_documents(self, state):
-        pass
+        print("---RETRIEVE---")
+        state_dict = state["keys"]
+        question = state_dict["question"]
+        documents = self.retriever.get_relevant_documents(question)
+        return {"keys": {"documents": documents, "question": question}}
 
     def relevance_grade(self, state):
-        pass
+        print("---CHECK RELEVANCE---")
+        state_dict = state["keys"]
+        question = state_dict["question"]
+        documents = state_dict["documents"]
+
+        # Data model
+        class grade(BaseModel):
+            """Binary score for relevance check."""
+
+            binary_score: str = Field(description="Relevance score 'yes' or 'no'")
+
+        # Tool
+        grade_tool_oai = convert_to_openai_tool(grade)
+
+        # LLM with tool and enforce invocation
+        llm_with_tool = self.model.bind(
+            tools=[grade_tool_oai],
+            tool_choice={"type": "function", "function": {"name": "grade"}},
+        )
+
+        # Parser
+        parser_tool = PydanticToolsParser(tools=[grade])
+
+        # Prompt
+        prompt = PromptTemplate(
+            template="""You are a grader assessing relevance of a retrieved document to a user question. \n 
+            Here is the retrieved document: \n\n {context} \n\n
+            Here is the user question: {question} \n
+            If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. \n
+            Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.""",
+            input_variables=["context", "question"],
+        )
+
+        # Chain
+        chain = prompt | llm_with_tool | parser_tool
+
+        # Score
+        filtered_docs = []
+        search = "No"  # Default do not opt for web search to supplement retrieval
+        for d in documents:
+            score = chain.invoke({"question": question, "context": d.page_content})
+            grade = score[0].binary_score
+            if grade == "yes":
+                print("---GRADE: DOCUMENT RELEVANT---")
+                filtered_docs.append(d)
+            else:
+                print("---GRADE: DOCUMENT NOT RELEVANT---")
+                continue
+        if len(filtered_docs) == 0:
+            search = "Yes"
+
+        return {
+            "keys": {
+                "documents": filtered_docs,
+                "question": question,
+                "run_web_search": search,
+            }
+        }
 
     def search_web(self, state):
         pass
