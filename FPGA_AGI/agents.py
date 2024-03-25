@@ -213,7 +213,7 @@ class ResearcherAgent(object):
         # Compile
         self.app = self.workflow.compile() 
 
-    # States https://github.com/langchain-ai/langgraph/blob/main/examples/multi_agent/multi-agent-collaboration.ipynb
+    # States 
     def researcher(self, state):
         """
         manage the data collection/computation processes. This agent is in fact a router.
@@ -227,9 +227,10 @@ class ResearcherAgent(object):
         class decision(BaseModel):
             """Decision regarding the next step of the process"""
 
-            decision: str = Field(description="Decision 'search' or 'compute' or 'solution'")
-            query: str = Field(description="If decision search, query to be searched; If decision compute, what needs to be computed")
-            information: str = Field(description="If decision information, all the collected information regarding to solve the problem, including any computaion results else, NA.")
+            decision: str = Field(description="Decision 'search' or 'compute' or 'solution'", default='search')
+            search: str = Field(description="If decision search, query to be searched else, NA", default='NA')
+            compute: str = Field(description="If decision compute, description of what needs to be computed else, NA", default='NA')
+            solution: str = Field(description="If decision information, all the collected information regarding to solve the problem, including any computaion results else, NA.", default='NA')
         # Tool
         decision_tool_oai = convert_to_openai_tool(decision)
         # LLM with tool and enforce invocation
@@ -240,16 +241,24 @@ class ResearcherAgent(object):
         prompt = PromptTemplate.from_messages(
             [SystemMessage(
                     "system","""
-                    You are a hardware engneer whose job is to collect all of the information needed, collaborating with other assistants.
-                    Use the provided tools to progress towards answering the question.
-                    Execute what you can to make progress.
-                    If you or any of the other assistants have the final answer or deliverable,
-                    prefix your response with FINAL ANSWER so the team knows to stop.
-                    You have access to the following tools: {tool_names}.,"""
+                    You are a hardware engneer whose job is to collect all of the information needed to create a new solution.
+                    You are collaborating with some assistants.
+                    Your job consists of coming up with what needs to be searched or computed and then making a decision to use 
+                    the search assistant, the compute assisstant or the final solution excerpt generator.
+                    You ask your questions or perform your computations one at a time.
+                    You are researching the necessary information for the following,
+                    goals:
+                    {goals}
+                    requirements:
+                    {requirements}
+                    You have access to the following assisstants: 
+                    search assisstant: This assisstant is going to perform document and internet searches.
+                    compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you"""
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
         )
+        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
 
 
     def retrieve_documents(self, state):
