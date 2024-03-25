@@ -11,7 +11,7 @@ except ModuleNotFoundError:
 import json
 from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_core.utils.function_calling import convert_to_openai_function, convert_to_openai_tool
+from langchain_core.utils.function_calling import convert_to_openai_function, convert_to_openai_tool, format_tool_to_openai_function
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import RunnablePassthrough
 from typing import TypedDict, Annotated, Sequence, List, Dict, Any
@@ -19,8 +19,11 @@ import operator
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
-from langchain.prompts import PromptTemplate
+from langchain.prompts import PromptTemplate, MessagesPlaceholder
 from langchain.output_parsers.openai_tools import PydanticToolsParser
+from langchain.schema import Document
+
+from langchain_community.tools.tavily_search import TavilySearchResults
 
 class Module(BaseModel):
     """module definition"""
@@ -169,7 +172,7 @@ class ResearcherAgentState(TypedDict):
 class ResearcherAgent(object):
     """This agent performs research on the design."""
 
-    def __init__(self, model: ChatOpenAI, retriever: Any, tools: List=[search_web]):
+    def __init__(self, model: ChatOpenAI, retriever: Any):
 
         self.retriever = retriever
         self.model = model
@@ -192,10 +195,10 @@ class ResearcherAgent(object):
             self.decide_to_websearch,
             {
                 "search_web": "search_web",
-                "evaluate_results": "evaluate_results",
+                "researcher": "researcher",
             },
         )
-        self.workflow.add_edge("search_web", "evaluate_results")
+        self.workflow.add_edge("search_web", "researcher")
         self.workflow.add_conditional_edges(
             "evaluate_results",
             self.decide_to_generate,
@@ -210,10 +213,10 @@ class ResearcherAgent(object):
         # Compile
         self.app = self.workflow.compile() 
 
-    # States
+    # States https://github.com/langchain-ai/langgraph/blob/main/examples/multi_agent/multi-agent-collaboration.ipynb
     def researcher(self, state):
         """
-        manage the data collection/computation process
+        manage the data collection/computation processes. This agent is in fact a router.
 
         Args:
             state (dict): The current graph state
@@ -225,9 +228,29 @@ class ResearcherAgent(object):
             """Decision regarding the next step of the process"""
 
             decision: str = Field(description="Decision 'search' or 'compute' or 'solution'")
-            code: str = Field(description="If decision compute, python code to be executed; else, NA.")
-            query: str = Field(description="If decision search, query to be searched; else, NA.")
-            solution: str = Field(description="If decision solution, solution approach for the current problem; else, NA.")
+            query: str = Field(description="If decision search, query to be searched; If decision compute, what needs to be computed")
+            information: str = Field(description="If decision information, all the collected information regarding to solve the problem, including any computaion results else, NA.")
+        # Tool
+        decision_tool_oai = convert_to_openai_tool(decision)
+        # LLM with tool and enforce invocation
+        llm_with_tool = self.model.bind(
+            tools=[decision_tool_oai],
+            tool_choice={"type": "function", "function": {"name": "decision"}},
+        )
+        prompt = PromptTemplate.from_messages(
+            [SystemMessage(
+                    "system","""
+                    You are a hardware engneer whose job is to collect all of the information needed, collaborating with other assistants.
+                    Use the provided tools to progress towards answering the question.
+                    Execute what you can to make progress.
+                    If you or any of the other assistants have the final answer or deliverable,
+                    prefix your response with FINAL ANSWER so the team knows to stop.
+                    You have access to the following tools: {tool_names}.,"""
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+
 
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
@@ -297,7 +320,35 @@ class ResearcherAgent(object):
         }
 
     def search_web(self, state):
-        pass
+        """
+        Web search based on the re-phrased question using Tavily API.
+
+        Args:
+            state (dict): The current graph state
+
+        Returns:
+            state (dict): Updates documents key with appended web results
+        """
+
+        print("---WEB SEARCH---")
+        state_dict = state["keys"]
+        question = state_dict["question"]
+        documents = state_dict["documents"]
+
+        tool = TavilySearchResults()
+        docs = tool.invoke({"query": question})
+        web_results = "\n".join([d["content"] for d in docs])
+        web_results = Document(page_content=web_results)
+        documents.append(web_results)
+
+        return {"keys": {"documents": documents, "question": question}}
+    
+    def compute(self, state):
+
+        print("---Compute---")
+        state_dict = state["keys"]
+        code = state_dict["code"]
+
 
     def evaluate_results(self, state):
         pass
@@ -346,3 +397,25 @@ if __name__ == "__main__":
                                             'instruction executions and validates the functionality of the processor.']
                                             )
     print(hierarchical_response)
+
+"""
+
+        functions = [format_tool_to_openai_function(t) for t in tools]
+
+        prompt = PromptTemplate.from_messages(
+            [SystemMessage(
+                    "system",
+                    You are a helpful AI assistant, collaborating with other assistants.
+                    Use the provided tools to progress towards answering the question.
+                    Execute what you can to make progress.
+                    If you or any of the other assistants have the final answer or deliverable,
+                    prefix your response with FINAL ANSWER so the team knows to stop.
+                    You have access to the following tools: {tool_names}.,
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+        
+        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
+        chain = prompt | self.model.bind_functions(functions)
+"""

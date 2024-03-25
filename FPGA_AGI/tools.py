@@ -1,6 +1,8 @@
 from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import SerpAPIWrapper
+from contextlib import redirect_stdout
+from FPGA_AGI.utils import extract_codes_from_string
 
 ### SerpAPI websearch tool
 
@@ -16,9 +18,8 @@ def search_web(keywords: str):
 
 @tool
 def python_run(input_dict: str):
-    """A Python shell. Execute python scripts. Input should be a valid python script.
-    You can use this tool for math computations of any kind in python.
-    If you want to see the output of a value, you should print it out with `print(...)`."""
+    """Use this to execute python code. If you want to see the output of a value,
+    you should print it out with `print(...)`. This is visible to the user."""
     if 'print' in input_dict:
         pass
     else:

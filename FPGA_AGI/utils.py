@@ -5,6 +5,38 @@ from typing import Any
 
 from FPGA_AGI.agents import HierarchicalResponse
 
+LANGS = (["systemverilog", "system verilog", "system_verilog", "system-verilog", "sv"] +
+         ["v", "verilog"] +
+         ["hls", "cpp", "c++", "cplusplus", "c plus plus", "c", "hls c", "hls c++", "hls cpp", "vivado hls c++"] +
+         ["vhdl", "vhd", "hdl"] + ["python"])
+
+def extract_codes_from_string(string):
+    lower_string = string.lower()  # Convert the entire string to lowercase
+    code = None
+    for lang in LANGS:
+        # Create the search pattern for each language in lowercase
+        start_pattern = f'```{lang.lower()}\n'
+        end_pattern = '\n```'
+
+        # Find the start and end indices for each code block
+        start_index = lower_string.find(start_pattern)
+        end_index = lower_string.rfind(end_pattern)
+
+        if start_index != -1 and end_index != -1:
+            # Calculate the actual start index in the original string
+            actual_start_index = start_index + len(start_pattern)
+
+            # Extract and store the code block from the original string
+            code = string[actual_start_index:end_index]
+            break
+
+    # Check if any code blocks have been extracted
+    if not code:
+        # If no code blocks are found, return the original string
+        return string
+    else:
+        return code
+
 def plot_graph(hierarchicalmodules: HierarchicalResponse, save_path: Any = None):
     # Create a directed graph
     G = nx.DiGraph()
