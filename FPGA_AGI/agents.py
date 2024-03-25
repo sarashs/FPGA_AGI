@@ -22,6 +22,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, Fu
 from langchain.prompts import PromptTemplate, MessagesPlaceholder
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.schema import Document
+from operator import itemgetter
 
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -166,8 +167,12 @@ class ResearcherAgentState(TypedDict):
 
     Attributes:
         keys: A dictionary where each key is a string.
+        messages: The commumications between the agents
+        sender: The agent who is sending the message
     """
     keys: Dict[str, any]
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    sender: str
 
 class ResearcherAgent(object):
     """This agent performs research on the design."""
@@ -224,13 +229,18 @@ class ResearcherAgent(object):
         Returns:
             state (dict): New key added to state, documents, that contains retrieved documents
         """
+        
+        goals = state['keys']['goals']
+        requirements = state['keys']['requirements']
+        context = state['keys']['context']
+        
         class decision(BaseModel):
             """Decision regarding the next step of the process"""
 
             decision: str = Field(description="Decision 'search' or 'compute' or 'solution'", default='search')
             search: str = Field(description="If decision search, query to be searched else, NA", default='NA')
             compute: str = Field(description="If decision compute, description of what needs to be computed else, NA", default='NA')
-            solution: str = Field(description="If decision information, all the collected information regarding to solve the problem, including any computaion results else, NA.", default='NA')
+        
         # Tool
         decision_tool_oai = convert_to_openai_tool(decision)
         # LLM with tool and enforce invocation
@@ -238,6 +248,11 @@ class ResearcherAgent(object):
             tools=[decision_tool_oai],
             tool_choice={"type": "function", "function": {"name": "decision"}},
         )
+        
+        # Parser
+        parser_tool = PydanticToolsParser(tools=[decision])
+
+        # prompt
         prompt = PromptTemplate.from_messages(
             [SystemMessage(
                     "system","""
@@ -251,15 +266,34 @@ class ResearcherAgent(object):
                     {goals}
                     requirements:
                     {requirements}
+                    user input context:
+                    {context}
                     You have access to the following assisstants: 
                     search assisstant: This assisstant is going to perform document and internet searches.
-                    compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you"""
+                    compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you.
+                    solution assisstant: This assisstant is going to generate the final excerpt based on the interaction you had with the other two agents."""
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
         )
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
+        #prompt = prompt.partial(goals=goals, requirements=requirements, context=context)
+        #prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
+        
+        # Chain
+        chain = (
+            {
+                "context": itemgetter("context"),
+                "goals": itemgetter("goals"),
+                "requirements": itemgetter("requirements"),
+            }
+            | prompt
+            | llm_with_tool
+            | parser_tool
+        )
 
+        code_solution = chain.invoke(
+            {"question": question, "generation": str(code_solution[0]), "error": error}
+        )
 
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
