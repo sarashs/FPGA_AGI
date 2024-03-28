@@ -3,8 +3,6 @@ import networkx as nx
 import json
 from typing import Any
 
-from FPGA_AGI.agents import HierarchicalResponse
-
 LANGS = (["systemverilog", "system verilog", "system_verilog", "system-verilog", "sv"] +
          ["v", "verilog"] +
          ["hls", "cpp", "c++", "cplusplus", "c plus plus", "c", "hls c", "hls c++", "hls cpp", "vivado hls c++"] +
@@ -37,7 +35,7 @@ def extract_codes_from_string(string):
     else:
         return code
 
-def plot_graph(hierarchicalmodules: HierarchicalResponse, save_path: Any = None):
+def plot_graph(hierarchicalmodules: Any, save_path: Any = None):
     # Create a directed graph
     G = nx.DiGraph()
 

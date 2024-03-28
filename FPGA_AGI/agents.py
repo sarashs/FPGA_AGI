@@ -19,7 +19,7 @@ import operator
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
-from langchain.prompts import PromptTemplate, MessagesPlaceholder
+from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.schema import Document
 from operator import itemgetter
@@ -45,7 +45,7 @@ class HierarchicalAgentState(TypedDict):
     
 class HierarchicalDesignAgent(object):
     """This agent performs a hierarchical design of the desired logic."""
-
+#TODO: we will have to merge the tool node into the compute node
     def __init__(self, model: ChatOpenAI, tools: List=[search_web]):
         tools.append(Thought)
         self.tool_executor = ToolExecutor(tools)
@@ -174,13 +174,128 @@ class ResearcherAgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     sender: str
 
-class ResearcherAgent(object):
+class Researcher(object):
     """This agent performs research on the design."""
 
     def __init__(self, model: ChatOpenAI, retriever: Any):
 
         self.retriever = retriever
         self.model = model
+
+    #### Research Agent
+        class decision(BaseModel):
+            """Decision regarding the next step of the process"""
+
+            decision: str = Field(description="Decision 'search' or 'compute' or 'solution'", default='search')
+            search: str = Field(description="If decision search, query to be searched else, NA", default='NA')
+            compute: str = Field(description="If decision compute, description of what needs to be computed else, NA", default='NA')
+        
+        # Tool
+        decision_tool_oai = convert_to_openai_tool(decision)
+        # LLM with tool and enforce invocation
+        research_with_tool = self.model.bind(
+            tools=[decision_tool_oai],
+            tool_choice={"type": "function", "function": {"name": "decision"}},
+        )
+        
+        # Parser
+        research_parser_tool = PydanticToolsParser(tools=[decision])
+
+        # prompt
+        research_prompt = ChatPromptTemplate.from_messages(
+            [(
+                    "system","""
+                    You are a hardware enigneer whose job is to collect all of the information needed to create a new solution.
+                    You are collaborating with some assistants.
+                    Your job consists of coming up with what needs to be searched or computed and then making a decision to use 
+                    the search assistant, the compute assisstant or the final solution excerpt generator.
+                    You ask your questions or perform your computations with the help of the assisstant agents one at a time.
+                    You have access to the following assisstants: 
+                    search assisstant: This assisstant is going to perform document and internet searches.
+                    compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you.
+                    solution assisstant: This assisstant is going to generate the final excerpt based on the interaction you had with the other two agents."""
+                ),
+                ("user","""You are researching the necessary information for the design. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design. 
+                    goals:
+                    {goals}
+                    requirements:
+                    {requirements}
+                    user input context:
+                    {context}"""),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+        
+        # Chain
+        self.research_agent = (
+            {
+                "context": itemgetter("context"),
+                "goals": itemgetter("goals"),
+                "requirements": itemgetter("requirements"),
+            }
+            | research_prompt
+            | research_with_tool
+            | research_parser_tool
+        )
+
+    #### Document Grading Agent
+        # Data model
+        class grade(BaseModel):
+            """Binary score for relevance check."""
+
+            binary_score: str = Field(description="Relevance score 'yes' or 'no'")
+
+        # Tool
+        grade_tool_oai = convert_to_openai_tool(grade)
+
+        # LLM with tool and enforce invocation
+        document_grading_llm_with_tool = self.model.bind(
+            tools=[grade_tool_oai],
+            tool_choice={"type": "function", "function": {"name": "grade"}},
+        )
+
+        # Parser
+        document_grading_parser_tool = PydanticToolsParser(tools=[grade])
+
+        # Prompt
+        document_grading_prompt = PromptTemplate(
+            template="""You are a grader assessing relevance of a retrieved document to a user question. \n 
+            Here is the retrieved document: \n\n {context} \n\n
+            Here is the user question: {question} \n
+            """,
+            input_variables=["context", "question"],
+        )
+
+        # Chain
+        self.document_grading_agent = document_grading_prompt | document_grading_llm_with_tool | document_grading_parser_tool
+
+    #### Compute Agent
+        # Data model
+        # Tool
+        #compute_tool_oai = convert_to_openai_tool(python_run)
+
+        # LLM with tool and enforce invocation
+        compute_llm_with_tool = self.model.bind(
+            tools=[python_run],
+            tool_choice={"type": "function", "function": {"name": "python_run"}},
+        )
+
+        # Prompt
+        compute_prompt = ChatPromptTemplate.from_messages(
+            [(
+                    "system","""
+                    You are a hardware engineer helping a senior hardware engineer with their computational needs. In order to do that you use python."""
+                ),
+                ("user","""Write a python code for the following. Run it and return the results. 
+                    {question}"""),
+                #MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+
+        # Chain
+        self.compute_agent = compute_prompt | compute_llm_with_tool
+
+        """
         self.workflow = StateGraph(ResearcherAgentState)
 
         # Define the nodes
@@ -216,7 +331,8 @@ class ResearcherAgent(object):
         self.workflow.add_edge("generate_excerpts", END)
 
         # Compile
-        self.app = self.workflow.compile() 
+        self.app = self.workflow.compile()
+        """
 
     # States 
     def researcher(self, state):
@@ -233,66 +349,8 @@ class ResearcherAgent(object):
         goals = state['keys']['goals']
         requirements = state['keys']['requirements']
         context = state['keys']['context']
-        
-        class decision(BaseModel):
-            """Decision regarding the next step of the process"""
-
-            decision: str = Field(description="Decision 'search' or 'compute' or 'solution'", default='search')
-            search: str = Field(description="If decision search, query to be searched else, NA", default='NA')
-            compute: str = Field(description="If decision compute, description of what needs to be computed else, NA", default='NA')
-        
-        # Tool
-        decision_tool_oai = convert_to_openai_tool(decision)
-        # LLM with tool and enforce invocation
-        llm_with_tool = self.model.bind(
-            tools=[decision_tool_oai],
-            tool_choice={"type": "function", "function": {"name": "decision"}},
-        )
-        
-        # Parser
-        parser_tool = PydanticToolsParser(tools=[decision])
-
-        # prompt
-        prompt = PromptTemplate.from_messages(
-            [SystemMessage(
-                    "system","""
-                    You are a hardware engneer whose job is to collect all of the information needed to create a new solution.
-                    You are collaborating with some assistants.
-                    Your job consists of coming up with what needs to be searched or computed and then making a decision to use 
-                    the search assistant, the compute assisstant or the final solution excerpt generator.
-                    You ask your questions or perform your computations one at a time.
-                    You are researching the necessary information for the following,
-                    goals:
-                    {goals}
-                    requirements:
-                    {requirements}
-                    user input context:
-                    {context}
-                    You have access to the following assisstants: 
-                    search assisstant: This assisstant is going to perform document and internet searches.
-                    compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you.
-                    solution assisstant: This assisstant is going to generate the final excerpt based on the interaction you had with the other two agents."""
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
-        #prompt = prompt.partial(goals=goals, requirements=requirements, context=context)
-        #prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-        
-        # Chain
-        chain = (
-            {
-                "context": itemgetter("context"),
-                "goals": itemgetter("goals"),
-                "requirements": itemgetter("requirements"),
-            }
-            | prompt
-            | llm_with_tool
-            | parser_tool
-        )
-
-        code_solution = chain.invoke(
-            {"question": question, "generation": str(code_solution[0]), "error": error}
+        code_solution = self.research_agent.invoke(
+            {"context": context, "goals": goals, "requirements": requirements}
         )
 
     def retrieve_documents(self, state):
@@ -307,43 +365,11 @@ class ResearcherAgent(object):
         state_dict = state["keys"]
         question = state_dict["question"]
         documents = state_dict["documents"]
-
-        # Data model
-        class grade(BaseModel):
-            """Binary score for relevance check."""
-
-            binary_score: str = Field(description="Relevance score 'yes' or 'no'")
-
-        # Tool
-        grade_tool_oai = convert_to_openai_tool(grade)
-
-        # LLM with tool and enforce invocation
-        llm_with_tool = self.model.bind(
-            tools=[grade_tool_oai],
-            tool_choice={"type": "function", "function": {"name": "grade"}},
-        )
-
-        # Parser
-        parser_tool = PydanticToolsParser(tools=[grade])
-
-        # Prompt
-        prompt = PromptTemplate(
-            template="""You are a grader assessing relevance of a retrieved document to a user question. \n 
-            Here is the retrieved document: \n\n {context} \n\n
-            Here is the user question: {question} \n
-            If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. \n
-            Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.""",
-            input_variables=["context", "question"],
-        )
-
-        # Chain
-        chain = prompt | llm_with_tool | parser_tool
-
         # Score
         filtered_docs = []
         search = "No"  # Default do not opt for web search to supplement retrieval
         for d in documents:
-            score = chain.invoke({"question": question, "context": d.page_content})
+            score = self.document_grading_agent.invoke({"question": question, "context": d.page_content})
             grade = score[0].binary_score
             if grade == "yes":
                 print("---GRADE: DOCUMENT RELEVANT---")
@@ -390,8 +416,6 @@ class ResearcherAgent(object):
 
         print("---Compute---")
         state_dict = state["keys"]
-        code = state_dict["code"]
-
 
     def evaluate_results(self, state):
         pass

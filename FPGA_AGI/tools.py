@@ -1,3 +1,4 @@
+import io
 from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import SerpAPIWrapper
@@ -19,7 +20,7 @@ def search_web(keywords: str):
 @tool
 def python_run(input_dict: str):
     """Use this to execute python code. If you want to see the output of a value,
-    you should print it out with `print(...)`. This is visible to the user."""
+    you should print it out with `print(...)`."""
     if 'print' in input_dict:
         pass
     else:
