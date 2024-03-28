@@ -215,25 +215,12 @@ class Researcher(object):
                     compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you.
                     solution assisstant: This assisstant is going to generate the final excerpt based on the interaction you had with the other two agents."""
                 ),
-                ("user","""You are researching the necessary information for the design. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design. 
-                    goals:
-                    {goals}
-                    requirements:
-                    {requirements}
-                    user input context:
-                    {context}"""),
                 MessagesPlaceholder(variable_name="messages"),
             ]
         )
         
         # Chain
-        self.research_agent = (
-            {
-                "context": itemgetter("context"),
-                "goals": itemgetter("goals"),
-                "requirements": itemgetter("requirements"),
-            }
-            | research_prompt
+        self.research_agent = (research_prompt
             | research_with_tool
             | research_parser_tool
         )
