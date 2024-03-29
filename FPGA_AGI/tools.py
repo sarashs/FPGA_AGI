@@ -3,6 +3,7 @@ from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import SerpAPIWrapper
 from contextlib import redirect_stdout
+from typing import Annotated
 from FPGA_AGI.utils import extract_codes_from_string
 
 ### SerpAPI websearch tool
@@ -18,10 +19,10 @@ def search_web(keywords: str):
 ### Python run tool
 
 @tool
-def python_run(input_dict: str):
+def python_run(code: Annotated[str, "The python code to execute to generate your chart."]):
     """Use this to execute python code. If you want to see the output of a value,
     you should print it out with `print(...)`."""
-    if 'print' in input_dict:
+    if 'print' in code:
         pass
     else:
         return "Your code is not printing the results."
@@ -29,7 +30,7 @@ def python_run(input_dict: str):
     output_buffer = io.StringIO()
     try:
         with redirect_stdout(output_buffer):
-            exec(extract_codes_from_string(input_dict), global_scope)
+            exec(extract_codes_from_string(code), global_scope)
         return output_buffer.getvalue()
     except Exception as e:
         return str(e)

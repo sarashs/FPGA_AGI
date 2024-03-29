@@ -23,6 +23,7 @@ from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTem
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.schema import Document
 from operator import itemgetter
+from langchain.agents import AgentExecutor, create_openai_tools_agent
 
 from langchain_community.tools.tavily_search import TavilySearchResults
 
@@ -257,30 +258,27 @@ class Researcher(object):
         self.document_grading_agent = document_grading_prompt | document_grading_llm_with_tool | document_grading_parser_tool
 
     #### Compute Agent
-        # Data model
-        # Tool
-        #compute_tool_oai = convert_to_openai_tool(python_run)
 
-        # LLM with tool and enforce invocation
-        compute_llm_with_tool = self.model.bind(
-            tools=[python_run],
-            tool_choice={"type": "function", "function": {"name": "python_run"}},
-        )
-
-        # Prompt
-        compute_prompt = ChatPromptTemplate.from_messages(
-            [(
-                    "system","""
-                    You are a hardware engineer helping a senior hardware engineer with their computational needs. In order to do that you use python."""
+        compute_agent_system_prompt = """You are a hardware engineer helping a senior hardware engineer with their computational needs. In order to do that you use python.
+        Work autonomously according to your specialty, using the tools available to you.
+        You must write a code to compute what is asked of you in python to answer the question.
+        Do not answer based on your own knowledge/memory. instead write a python code that computes the answer, run it, and observe the results.
+        You must print the results in your response no matter how long or large they might be. 
+        You must completely print the results. Do not leave any place holders. Do not use ... 
+        Do not ask for clarification. You also do not refuse to answer the question.
+        Your other team members (and other teams) will collaborate with you with their own specialties."""
+        compute_agent_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    compute_agent_system_prompt,
                 ),
-                ("user","""Write a python code for the following. Run it and return the results. 
-                    {question}"""),
-                #MessagesPlaceholder(variable_name="messages"),
+                MessagesPlaceholder(variable_name="messages"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
-
-        # Chain
-        self.compute_agent = compute_prompt | compute_llm_with_tool
+        agent_with_tool = create_openai_tools_agent(self.model, [python_run], compute_agent_prompt)
+        self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run])
 
         """
         self.workflow = StateGraph(ResearcherAgentState)
