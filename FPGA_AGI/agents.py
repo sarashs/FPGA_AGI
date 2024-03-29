@@ -331,12 +331,17 @@ class Researcher(object):
             state (dict): New key added to state, documents, that contains retrieved documents
         """
         
-        goals = state['keys']['goals']
-        requirements = state['keys']['requirements']
-        context = state['keys']['context']
-        code_solution = self.research_agent.invoke(
-            {"context": context, "goals": goals, "requirements": requirements}
-        )
+        response = self.research_agent.invoke(state)
+        decision = response[0].decision
+        if decision.lower() == 'compute':
+            message = HumanMessage(response[0].compute, name="researcher")
+        else:
+            message = HumanMessage(response[0].search, name="researcher")
+        return{
+        "messages": [message],
+        "sender": "researcher",
+        "keys": {"decision": decision}
+        }
 
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
@@ -415,6 +420,23 @@ class Researcher(object):
     def decide_to_websearch(self, state):
         pass
 
+    def invoke(self, goals, requirements):
+        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
+        output = self.app.invoke(inputs)
+        out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
+        out = HierarchicalResponse.parse_obj(out)
+        return out
+
+    def stream(self, goals, requirements):
+        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
+        for output in self.app.stream(inputs):
+        # stream() yields dictionaries with output keyed by node name
+            for key, value in output.items():
+                print(f"Output from node '{key}':")
+                print("---")
+                print(value)
+                print("\n---\n")
+
 if __name__ == "__main__":
     from pprint import pprint   
 
@@ -449,25 +471,3 @@ if __name__ == "__main__":
                                             'instruction executions and validates the functionality of the processor.']
                                             )
     print(hierarchical_response)
-
-"""
-
-        functions = [format_tool_to_openai_function(t) for t in tools]
-
-        prompt = PromptTemplate.from_messages(
-            [SystemMessage(
-                    "system",
-                    You are a helpful AI assistant, collaborating with other assistants.
-                    Use the provided tools to progress towards answering the question.
-                    Execute what you can to make progress.
-                    If you or any of the other assistants have the final answer or deliverable,
-                    prefix your response with FINAL ANSWER so the team knows to stop.
-                    You have access to the following tools: {tool_names}.,
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
-        
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-        chain = prompt | self.model.bind_functions(functions)
-"""
