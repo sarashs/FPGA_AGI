@@ -280,20 +280,30 @@ class Researcher(object):
         agent_with_tool = create_openai_tools_agent(self.model, [python_run], compute_agent_prompt)
         self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run])
 
-        """
+        
         self.workflow = StateGraph(ResearcherAgentState)
 
         # Define the nodes
         self.workflow.add_node("researcher", self.researcher)
+        self.workflow.add_node("compute", self.compute)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
         self.workflow.add_node("evaluate_results", self.relevance_grade)
         self.workflow.add_node("generate_excerpts", self.generate_excerpts) 
         self.workflow.add_node("search_web", self.search_web)
+        self.workflow.add_node("router", self._router)
 
         # Build graph
         self.workflow.set_entry_point("researcher")
-        self.workflow.add_edge("researcher", "retrieve_documents")
+        self.workflow.add_edge("researcher", "router")
+        self.workflow.add_conditional_edges(
+            "router",
+            self.decide_to_websearch,
+            {
+                "search": "retrieve_documents",
+                "compute": "compute",
+            },
+        )
         self.workflow.add_edge("retrieve_documents", "relevance_grade")
         self.workflow.add_conditional_edges(
             "relevance_grade",
@@ -313,16 +323,17 @@ class Researcher(object):
             },
         )
         self.workflow.add_edge("evaluate_results", "generate")
+        self.workflow.add_edge("compute", "researcher")
         self.workflow.add_edge("generate_excerpts", END)
 
         # Compile
         self.app = self.workflow.compile()
-        """
+        
 
     # States 
     def researcher(self, state):
         """
-        manage the data collection/computation processes. This agent is in fact a router.
+        manage the data collection/computation processes.
 
         Args:
             state (dict): The current graph state
@@ -342,6 +353,17 @@ class Researcher(object):
         "sender": "researcher",
         "keys": {"decision": decision}
         }
+    
+    def _router(self, state):
+        """
+        Router
+
+        Args:
+            state (dict): The current graph state
+
+        Returns:
+            state (dict): New key added to state, documents, that contains retrieved documents
+        """
 
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
