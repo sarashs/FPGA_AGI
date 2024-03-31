@@ -291,17 +291,16 @@ class Researcher(object):
         self.workflow.add_node("evaluate_results", self.relevance_grade)
         self.workflow.add_node("generate_excerpts", self.generate_excerpts) 
         self.workflow.add_node("search_web", self.search_web)
-        self.workflow.add_node("router", self._router)
 
         # Build graph
         self.workflow.set_entry_point("researcher")
-        self.workflow.add_edge("researcher", "router")
         self.workflow.add_conditional_edges(
-            "router",
-            self.decide_to_websearch,
+            "researcher",
+            (lambda x: x['keys']['decision']),
             {
                 "search": "retrieve_documents",
                 "compute": "compute",
+                "solution": "generate_excerpts",
             },
         )
         self.workflow.add_edge("retrieve_documents", "relevance_grade")
@@ -314,15 +313,6 @@ class Researcher(object):
             },
         )
         self.workflow.add_edge("search_web", "researcher")
-        self.workflow.add_conditional_edges(
-            "evaluate_results",
-            self.decide_to_generate,
-            {
-                "researcher": "researcher",
-                "generate_excerpts": "generate_excerpts",
-            },
-        )
-        self.workflow.add_edge("evaluate_results", "generate")
         self.workflow.add_edge("compute", "researcher")
         self.workflow.add_edge("generate_excerpts", END)
 
@@ -343,7 +333,9 @@ class Researcher(object):
         """
         
         response = self.research_agent.invoke(state)
-        decision = response[0].decision
+        decision = response[0].decision.lower()
+        search = response[0].search.lower()
+        compute = response[0].compute.lower()
         if decision.lower() == 'compute':
             message = HumanMessage(response[0].compute, name="researcher")
         else:
@@ -351,35 +343,26 @@ class Researcher(object):
         return{
         "messages": [message],
         "sender": "researcher",
-        "keys": {"decision": decision}
+        "keys": {"decision": decision,
+                 "search": search,
+                 "compute": compute}
         }
-    
-    def _router(self, state):
-        """
-        Router
-
-        Args:
-            state (dict): The current graph state
-
-        Returns:
-            state (dict): New key added to state, documents, that contains retrieved documents
-        """
 
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
         state_dict = state["keys"]
-        question = state_dict["question"]
+        question = state_dict["search"]
         documents = self.retriever.get_relevant_documents(question)
-        return {"keys": {"documents": documents, "question": question}}
+        return {"keys": {"documents": documents, "search": question}}
 
     def relevance_grade(self, state):
         print("---CHECK RELEVANCE---")
         state_dict = state["keys"]
-        question = state_dict["question"]
+        question = state_dict["search"]
         documents = state_dict["documents"]
         # Score
         filtered_docs = []
-        search = "No"  # Default do not opt for web search to supplement retrieval
+        run_web_search = "No"  # Default do not opt for web search to supplement retrieval
         for d in documents:
             score = self.document_grading_agent.invoke({"question": question, "context": d.page_content})
             grade = score[0].binary_score
@@ -390,13 +373,13 @@ class Researcher(object):
                 print("---GRADE: DOCUMENT NOT RELEVANT---")
                 continue
         if len(filtered_docs) == 0:
-            search = "Yes"
+            run_web_search = "Yes"
 
         return {
             "keys": {
-                "documents": filtered_docs,
-                "question": question,
-                "run_web_search": search,
+                "filtered_docs": filtered_docs,
+                "search": question,
+                "run_web_search": run_web_search,
             }
         }
 
@@ -413,8 +396,8 @@ class Researcher(object):
 
         print("---WEB SEARCH---")
         state_dict = state["keys"]
-        question = state_dict["question"]
-        documents = state_dict["documents"]
+        question = state_dict["search"]
+        documents = state_dict["filtered_docs"]
 
         tool = TavilySearchResults()
         docs = tool.invoke({"query": question})
@@ -422,15 +405,17 @@ class Researcher(object):
         web_results = Document(page_content=web_results)
         documents.append(web_results)
 
-        return {"keys": {"documents": documents, "question": question}}
+        result = HumanMessage("\n\n".join(documents), name="search")
+        return {
+            "messages": [result],
+            "sender": "search",
+        }
     
     def compute(self, state):
 
         print("---Compute---")
-        state_dict = state["keys"]
-
-    def evaluate_results(self, state):
-        pass
+        messages = state["messages"]
+        self.compute_agent
 
     def generate_excerpts(self, state):
         pass
@@ -440,7 +425,25 @@ class Researcher(object):
         pass
 
     def decide_to_websearch(self, state):
-        pass
+ 
+        state_dict = state["keys"]
+        question = state_dict["search"]
+        filtered_docs = state_dict["filtered_docs"]
+        run_web_search = state_dict["run_web_search"]
+        if run_web_search.lower() == "yes":
+            return { "keys" :
+                    {
+                "search": question,
+                "filtered_docs": "filtered_docs",
+                }
+            }
+        else:
+            result = HumanMessage("\n\n".join(filtered_docs), name="search")
+            return {
+                "messages": [result],
+                "sender": "search",
+            }
+
 
     def invoke(self, goals, requirements):
         inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
