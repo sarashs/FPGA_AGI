@@ -8,6 +8,7 @@ try:
 except ModuleNotFoundError:
     from prompts import hierarchical_agent_prompt
 
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate
 import json
 from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
@@ -288,7 +289,6 @@ class Researcher(object):
         self.workflow.add_node("compute", self.compute)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
-        self.workflow.add_node("evaluate_results", self.relevance_grade)
         self.workflow.add_node("generate_excerpts", self.generate_excerpts) 
         self.workflow.add_node("search_web", self.search_web)
 
@@ -415,14 +415,15 @@ class Researcher(object):
 
         print("---Compute---")
         messages = state["messages"]
-        self.compute_agent
+        result = self.compute_agent.invoke({"messages": messages})
+        result = HumanMessage(result['output'], name="compute")
+        return {
+            "messages": [result],
+            "sender": "compute",
+        }
 
     def generate_excerpts(self, state):
-        pass
-
-    #conditions
-    def decide_to_generate(self, state):
-        pass
+        print(state["messages"])
 
     def decide_to_websearch(self, state):
  
@@ -445,16 +446,28 @@ class Researcher(object):
             }
 
 
-    def invoke(self, goals, requirements):
-        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
-        output = self.app.invoke(inputs)
-        out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
-        out = HierarchicalResponse.parse_obj(out)
-        return out
+    def invoke(self, goals, requirements, input_context):
+        research_agent_prompt_human = HumanMessagePromptTemplate.from_template("""You are researching the necessary information for the design. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design. 
+                    goals:
+                    {goals}
+                    requirements:
+                    {requirements}
+                    user input context:
+                    {input_context}""")
+        human_message = research_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
+        output = self.app.invoke({"messages": human_message})
+        return output
 
-    def stream(self, goals, requirements):
-        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
-        for output in self.app.stream(inputs):
+    def stream(self, goals, requirements, input_context):
+        research_agent_prompt_human = HumanMessagePromptTemplate.from_template("""You are researching the necessary information for the design. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design. 
+                    goals:
+                    {goals}
+                    requirements:
+                    {requirements}
+                    user input context:
+                    {input_context}""")
+        human_message = research_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
+        for output in self.app.stream({"messages": human_message}):
         # stream() yields dictionaries with output keyed by node name
             for key, value in output.items():
                 print(f"Output from node '{key}':")
