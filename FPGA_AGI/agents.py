@@ -331,8 +331,9 @@ class Researcher(object):
         Returns:
             state (dict): New key added to state, documents, that contains retrieved documents
         """
-        
-        response = self.research_agent.invoke(state)
+        messages = state["messages"]
+        print(messages)
+        response = self.research_agent.invoke({"messages": messages})
         decision = response[0].decision.lower()
         search = response[0].search.lower()
         compute = response[0].compute.lower()
@@ -362,27 +363,35 @@ class Researcher(object):
         documents = state_dict["documents"]
         # Score
         filtered_docs = []
-        run_web_search = "No"  # Default do not opt for web search to supplement retrieval
         for d in documents:
             score = self.document_grading_agent.invoke({"question": question, "context": d.page_content})
             grade = score[0].binary_score
             if grade == "yes":
                 print("---GRADE: DOCUMENT RELEVANT---")
-                filtered_docs.append(d)
+                filtered_docs.append(d.page_content)
             else:
                 print("---GRADE: DOCUMENT NOT RELEVANT---")
                 continue
         if len(filtered_docs) == 0:
-            run_web_search = "Yes"
-
-        return {
-            "keys": {
-                "filtered_docs": filtered_docs,
-                "search": question,
-                "run_web_search": run_web_search,
+            return {
+                "keys": {
+                    "filtered_docs": filtered_docs,
+                    "search": question,
+                    "run_web_search": "Yes",
+                }
             }
-        }
-
+        else:
+            result = HumanMessage("\n\n".join(filtered_docs), name="search")
+            return {
+                "messages": [result],
+                "sender": "search",
+                "keys": {
+                    "filtered_docs": filtered_docs,
+                    "search": question,
+                    "run_web_search": "No",
+                }
+            }
+        
     def search_web(self, state):
         """
         Web search based on the re-phrased question using Tavily API.
@@ -402,7 +411,7 @@ class Researcher(object):
         tool = TavilySearchResults()
         docs = tool.invoke({"query": question})
         web_results = "\n".join([d["content"] for d in docs])
-        web_results = Document(page_content=web_results)
+        #web_results = Document(page_content=web_results)
         documents.append(web_results)
 
         result = HumanMessage("\n\n".join(documents), name="search")
@@ -428,22 +437,11 @@ class Researcher(object):
     def decide_to_websearch(self, state):
  
         state_dict = state["keys"]
-        question = state_dict["search"]
-        filtered_docs = state_dict["filtered_docs"]
         run_web_search = state_dict["run_web_search"]
         if run_web_search.lower() == "yes":
-            return { "keys" :
-                    {
-                "search": question,
-                "filtered_docs": "filtered_docs",
-                }
-            }
+            return "search_web"
         else:
-            result = HumanMessage("\n\n".join(filtered_docs), name="search")
-            return {
-                "messages": [result],
-                "sender": "search",
-            }
+            return "reseacher"
 
 
     def invoke(self, goals, requirements, input_context):
@@ -455,7 +453,7 @@ class Researcher(object):
                     user input context:
                     {input_context}""")
         human_message = research_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
-        output = self.app.invoke({"messages": human_message})
+        output = self.app.invoke({"messages": human_message}, {"recursion_limit": 150})
         return output
 
     def stream(self, goals, requirements, input_context):
@@ -467,14 +465,10 @@ class Researcher(object):
                     user input context:
                     {input_context}""")
         human_message = research_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
-        for output in self.app.stream({"messages": human_message}):
+        for output in self.app.stream({"messages": human_message}, {"recursion_limit": 150}):
         # stream() yields dictionaries with output keyed by node name
-            for key, value in output.items():
-                print(f"Output from node '{key}':")
-                print("---")
-                print(value)
-                print("\n---\n")
-
+            print(output)
+            print("----")
 if __name__ == "__main__":
     from pprint import pprint   
 
