@@ -169,12 +169,12 @@ class ResearcherAgentState(TypedDict):
 
     Attributes:
         keys: A dictionary where each key is a string.
-        plan: A list consisting of the step by step plan.
+        remaining_steps: A list consisting of the step by step plan.
         messages: The commumications between the agents
         sender: The agent who is sending the message
     """
     keys: Dict[str, any]
-    plan: List[str]
+    remaining_steps: List[str]
     messages: Annotated[Sequence[BaseMessage], operator.add]
     sender: str
 
@@ -205,22 +205,30 @@ class Researcher(object):
             tools=[plan_tool_oai],
             tool_choice={"type": "function", "function": {"name": "Plan"}},
         )
-        planner_prompt = ChatPromptTemplate.from_template(
-        """You are a hardware design engineer and your purpose is to come up with a step by step plan that will enable the design engineers to actually design a hardware based on the set of goals, requirements and the context given by the user. \
-        This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. You are not responsible for simulations and testing. You are only responsible for design. \
-        Your steps should consist of:
-        - search when something needs to be searched via the internet or corpus of data. \
-        - computes when something needs to be computed via writing a python code. This should include parameters, functions etc that would be coded into the final design. For example generating the values for a lookup table implementation of a non-linear function is a compute step.\
-        - solution when we have all of the necessary information for enerating the final design. \
-        The result of the final step should be "solution: writing the final design in the form of an HDL/HLS code." Make sure that each step has all the information needed - do not skip steps.
 
-        goals:
-        {goals}
-        requirements:
-        {requirements}
-        user input context:
-        {input_context}"""
+        # prompt
+        planner_prompt = ChatPromptTemplate.from_messages(
+            [(
+                    "system",
+                    """You are a hardware design engineer and your purpose is to come up with a step by step plan that will enable the design engineers to actually design a hardware based on the set of goals, requirements and the context given by the user. \
+                    This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. You are not responsible for simulations and testing. You are only responsible for design. \
+                    Your steps should consist of:
+                    - search when something needs to be searched via the internet or corpus of data. \
+                    - computes when something needs to be computed via writing a python code. This should include parameters, functions etc that would be coded into the final design. For example generating the values for a lookup table implementation of a non-linear function is a compute step.\
+                    - solution when we have all of the necessary information for enerating the final design. \
+                    The result of the final step should be "solution: writing the final design in the form of an HDL/HLS code." Make sure that each step has all the information needed - do not skip steps."""
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
         )
+        # This is the input prompt for when the object is invoked or streamed
+        self.planner_agent_prompt_human = HumanMessagePromptTemplate.from_template("""You are planning the procedure for the following. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design seamlessly.
+                    goals:
+                    {goals}
+                    requirements:
+                    {requirements}
+                    user input context:
+                    {input_context}""")
         # Chain
         self.planner_agent = (planner_prompt
             | planner_with_tool
@@ -361,8 +369,31 @@ class Researcher(object):
         # Compile
         self.app = self.workflow.compile()
         
+    # States
 
-    # States 
+    def planner(self, state):
+        """
+        First node that generates an initial plan
+
+        Args:
+            state (dict): The current graph state
+
+        Returns:
+            state (dict): New key added to state, documents, that contains retrieved documents
+        """
+        messages = state["messages"]
+        print(messages)
+        response = self.planner_agent.invoke({"messages": messages})
+        steps = response[0].steps
+        if not len(steps) > 0:
+            raise AssertionError("The planner step failed to generate any plans")
+        message = HumanMessage("The plan as per the planner agent is as follows:" + "\n -".join(steps), name="planner")
+        return{
+        "messages": [message],
+        "sender": "planner",
+        "remaining_steps" : steps
+        }
+     
     def researcher(self, state):
         """
         manage the data collection/computation processes.
@@ -487,26 +518,12 @@ class Researcher(object):
 
 
     def invoke(self, goals, requirements, input_context):
-        research_agent_prompt_human = HumanMessagePromptTemplate.from_template("""You are researching the necessary information for the design. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design. 
-                    goals:
-                    {goals}
-                    requirements:
-                    {requirements}
-                    user input context:
-                    {input_context}""")
-        human_message = research_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
+        human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
         output = self.app.invoke({"messages": human_message}, {"recursion_limit": 150})
         return output
 
     def stream(self, goals, requirements, input_context):
-        research_agent_prompt_human = HumanMessagePromptTemplate.from_template("""You are researching the necessary information for the design. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design. 
-                    goals:
-                    {goals}
-                    requirements:
-                    {requirements}
-                    user input context:
-                    {input_context}""")
-        human_message = research_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
+        human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
         for output in self.app.stream({"messages": human_message}, {"recursion_limit": 150}):
         # stream() yields dictionaries with output keyed by node name
             print(output)
