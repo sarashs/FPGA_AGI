@@ -169,10 +169,12 @@ class ResearcherAgentState(TypedDict):
 
     Attributes:
         keys: A dictionary where each key is a string.
+        plan: A list consisting of the step by step plan.
         messages: The commumications between the agents
         sender: The agent who is sending the message
     """
     keys: Dict[str, any]
+    plan: List[str]
     messages: Annotated[Sequence[BaseMessage], operator.add]
     sender: str
 
@@ -184,6 +186,46 @@ class Researcher(object):
         self.retriever = retriever
         self.model = model
 
+        #### Plan Agent
+        class Plan(BaseModel):
+            """Plan to follow in future"""
+
+            steps: List[str] = Field(
+                description="different steps to follow, should be in sorted order"
+            )
+            
+        # Tool
+        plan_tool_oai = convert_to_openai_tool(Plan)
+
+        # Parser
+        plan_parser_tool = PydanticToolsParser(tools=[Plan])
+
+        # LLM with tool and enforce invocation
+        planner_with_tool = self.model.bind(
+            tools=[plan_tool_oai],
+            tool_choice={"type": "function", "function": {"name": "Plan"}},
+        )
+        planner_prompt = ChatPromptTemplate.from_template(
+        """You are a hardware design engineer and your purpose is to come up with a step by step plan that will enable the design engineers to actually design a hardware based on the set of goals, requirements and the context given by the user. \
+        This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. You are not responsible for simulations and testing. You are only responsible for design. \
+        Your steps should consist of:
+        - search when something needs to be searched via the internet or corpus of data. \
+        - computes when something needs to be computed via writing a python code. This should include parameters, functions etc that would be coded into the final design. For example generating the values for a lookup table implementation of a non-linear function is a compute step.\
+        - solution when we have all of the necessary information for enerating the final design. \
+        The result of the final step should be "solution: writing the final design in the form of an HDL/HLS code." Make sure that each step has all the information needed - do not skip steps.
+
+        goals:
+        {goals}
+        requirements:
+        {requirements}
+        user input context:
+        {input_context}"""
+        )
+        # Chain
+        self.planner_agent = (planner_prompt
+            | planner_with_tool
+            | plan_parser_tool
+        )
     #### Research Agent
         class decision(BaseModel):
             """Decision regarding the next step of the process"""
