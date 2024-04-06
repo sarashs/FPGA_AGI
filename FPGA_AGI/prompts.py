@@ -23,14 +23,6 @@ requirement_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 #####
-hierarchical_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the architecture graph for the following goals and requirements.
-
-                Goals:
-                {goals}
-                
-                Requirements:
-                {requirements}
-                """)
 
 hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
     [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project.
@@ -44,7 +36,17 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
             Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
             Action: the action to take, should be one of the functions you have access to.
             ... (this Thought/Action can repeat 3 times)
-            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""), hierarchical_agent_prompt_human
+            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
+            MessagesPlaceholder(variable_name="messages"),
 ]
 )
+
+# The following prompt prepares message for the hirearchical design agent based only on goals and requirements
+hierarchical_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the architecture graph for the following goals and requirements.
+        Goals:
+        {goals}
+        
+        Requirements:
+        {requirements}
+        """)
 #####

@@ -1,12 +1,11 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-except ModuleNotFoundError:
-    from tools import search_web, python_run, Thought
-
-try:
     from FPGA_AGI.prompts import hierarchical_agent_prompt
+    from FPGA_AGI.parameters import RECURSION_LIMIT
 except ModuleNotFoundError:
     from prompts import hierarchical_agent_prompt
+    from FPGA_AGI.parameters import RECURSION_LIMIT
+    from tools import search_web, python_run, Thought
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate
 import json
@@ -14,7 +13,6 @@ from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_core.utils.function_calling import convert_to_openai_function, convert_to_openai_tool, format_tool_to_openai_function
 from langchain_openai import ChatOpenAI
-from langchain_core.runnables import RunnablePassthrough
 from typing import TypedDict, Annotated, Sequence, List, Dict, Any
 import operator
 from langgraph.prebuilt import ToolInvocation
@@ -22,8 +20,6 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
 from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate
 from langchain.output_parsers.openai_tools import PydanticToolsParser
-from langchain.schema import Document
-from operator import itemgetter
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -54,7 +50,8 @@ class HierarchicalDesignAgent(object):
         self.tool_executor = ToolExecutor(tools)
         functions = [convert_to_openai_function(t) for t in tools]
         functions.append(convert_to_openai_function(HierarchicalResponse))
-        self.model = model.bind_functions(functions)
+        prompt = hierarchical_agent_prompt
+        self.model = prompt | model.bind_functions(functions)
         # Define a new graph
         self.workflow = StateGraph(HierarchicalAgentState)
 
@@ -111,8 +108,8 @@ class HierarchicalDesignAgent(object):
 
     # Define the function that calls the model
     def call_model(self, state):
-        messages = state["messages"]
-        response = self.model.invoke(messages)
+        #messages = state["messages"]
+        response = self.model.invoke(state)
         # We return a list, because this will get added to the existing list
         return {"messages": [response]}
 
@@ -140,16 +137,16 @@ class HierarchicalDesignAgent(object):
         else:
             return
 
-    def invoke(self, goals, requirements):
-        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
-        output = self.app.invoke(inputs)
+    def invoke(self, messages):
+
+        output = self.app.invoke(messages, {"recursion_limit": RECURSION_LIMIT})
         out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
         out = HierarchicalResponse.parse_obj(out)
         return out
 
-    def stream(self, goals, requirements):
-        inputs = {'messages': hierarchical_agent_prompt.format_prompt(goals=goals, requirements='\n'.join(requirements)).to_messages()}
-        for output in self.app.stream(inputs):
+    def stream(self, messages):
+        
+        for output in self.app.stream(messages, {"recursion_limit": RECURSION_LIMIT}):
         # stream() yields dictionaries with output keyed by node name
             for key, value in output.items():
                 print(f"Output from node '{key}':")
@@ -333,7 +330,9 @@ class Researcher(object):
         agent_with_tool = create_openai_tools_agent(self.model, [python_run], compute_agent_prompt)
         self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run])
 
-        
+    #### Hierarchical Design Agent
+        self.hierarchical_design_agent = HierarchicalDesignAgent(model)
+
         self.workflow = StateGraph(ResearcherAgentState)
 
         # Define the nodes
@@ -539,12 +538,12 @@ class Researcher(object):
 
     def invoke(self, goals, requirements, input_context):
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
-        output = self.app.invoke({"messages": human_message}, {"recursion_limit": 150})
+        output = self.app.invoke({"messages": human_message}, {"recursion_limit": RECURSION_LIMIT})
         return output
 
     def stream(self, goals, requirements, input_context):
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
-        for output in self.app.stream({"messages": human_message}, {"recursion_limit": 150}):
+        for output in self.app.stream({"messages": human_message}, {"recursion_limit": RECURSION_LIMIT}):
         # stream() yields dictionaries with output keyed by node name
             print(output)
             print("----")
