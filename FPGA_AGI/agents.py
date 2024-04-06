@@ -2,9 +2,11 @@ try:
     from FPGA_AGI.tools import search_web, python_run, Thought
     from FPGA_AGI.prompts import hierarchical_agent_prompt
     from FPGA_AGI.parameters import RECURSION_LIMIT
+    from FPGA_AGI.chains import WebsearchCleaner
 except ModuleNotFoundError:
     from prompts import hierarchical_agent_prompt
-    from FPGA_AGI.parameters import RECURSION_LIMIT
+    from parameters import RECURSION_LIMIT
+    from chains import WebsearchCleaner
     from tools import search_web, python_run, Thought
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate
@@ -31,7 +33,7 @@ class Module(BaseModel):
     description: str = Field(description="Module description.")
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    notes: str = Field(description="Any points, notes, information or computations necessary for the implementation of module.")
+    notes: str = Field(description="Self-sufficiently in formative and extensive note on any points, notes, information or computations necessary for the implementation of the module that is obtained by you.")
 
 class HierarchicalResponse(BaseModel):
     """Final response to the user"""
@@ -183,6 +185,7 @@ class Researcher(object):
 
         self.retriever = retriever
         self.model = model
+        self.webcleaner = WebsearchCleaner.from_llm(llm=model)
 
         #### Plan Agent
         class Plan(BaseModel):
@@ -341,8 +344,8 @@ class Researcher(object):
         self.workflow.add_node("compute", self.compute)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
-        self.workflow.add_node("generate_excerpts", self.generate_excerpts) 
-        self.workflow.add_node("search_web", self.search_web)
+        self.workflow.add_node("hierarchical_solution", self.hierarchical_solution) 
+        self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
         self.workflow.set_entry_point("planner")
@@ -353,7 +356,7 @@ class Researcher(object):
             {
                 "search": "retrieve_documents",
                 "compute": "compute",
-                "solution": "generate_excerpts",
+                "solution": "hierarchical_solution",
             },
         )
         self.workflow.add_edge("retrieve_documents", "relevance_grade")
@@ -361,13 +364,13 @@ class Researcher(object):
             "relevance_grade",
             self.decide_to_websearch,
             {
-                "search_web": "search_web",
+                "search_the_web": "search_the_web",
                 "researcher": "researcher",
             },
         )
-        self.workflow.add_edge("search_web", "researcher")
+        self.workflow.add_edge("search_the_web", "researcher")
         self.workflow.add_edge("compute", "researcher")
-        self.workflow.add_edge("generate_excerpts", END)
+        self.workflow.add_edge("hierarchical_solution", END)
 
         # Compile
         self.app = self.workflow.compile()
@@ -479,7 +482,7 @@ class Researcher(object):
                 }
             }
         
-    def search_web(self, state):
+    def search_the_web(self, state):
         """
         Web search based on the re-phrased question using Tavily API.
 
@@ -498,7 +501,14 @@ class Researcher(object):
 
         tool = TavilySearchResults()
         docs = tool.invoke({"query": question})
-        web_results = "\n".join([d["content"] for d in docs])
+        web_results = []
+        for d in docs:
+            try:
+                cleaned_content = self.webcleaner.invoke(d["content"])
+                web_results.append(cleaned_content.cleaned)
+            except:
+                print("Warning: This item in websearch did not yield any content.")
+        web_results = "\n".join(web_results)
         #web_results = Document(page_content=web_results)
         documents.append(web_results)
 
@@ -523,15 +533,23 @@ class Researcher(object):
             "remaining_steps": remaining_steps,
         }
 
-    def generate_excerpts(self, state):
-        print(state["messages"])
+    def hierarchical_solution(self, state):
+        hierarchical_design = self.hierarchical_design_agent.invoke(
+            {
+                "messages" : state["messages"],
+                }
+            )
+        with open('hierarchical_design.json', 'w') as f:
+            json.dump(hierarchical_design.json(), f)
+        with open("messages.md", "w") as f:
+            f.write("\n".join([item.content for item in state["messages"]]))
 
     def decide_to_websearch(self, state):
  
         state_dict = state["keys"]
         run_web_search = state_dict["run_web_search"]
         if run_web_search.lower() == "yes":
-            return "search_web"
+            return "search_the_web"
         else:
             return "researcher"
 
@@ -548,36 +566,5 @@ class Researcher(object):
             print(output)
             print("----")
 if __name__ == "__main__":
-    from pprint import pprint   
-
-    #gpt-4-0125-preview
-    model = ChatOpenAI(model='gpt-4-1106-preview', temperature=0, streaming=True)
-
-    tools = [search_web]
-
-    agent = HierarchicalDesignAgent(model, tools)
-
-    hierarchical_response = agent.invoke('Design an 8-bit RISC V processor using SystemVerilog.', ['1. The processor must be designed based on the RISC V instruction set and '
-                                            'should follow a Harvard-type data path structure.',
-                                            '2. Implement memory access instructions including Load Word (LD) and Store '
-                                            'Word (ST) with the specified operations.',
-                                            '3. Implement data processing instructions including Add (ADD), Subtract '
-                                            '(SUB), Invert (INV), Logical Shift Left (LSL), Logical Shift Right (LSR), '
-                                            'Bitwise AND (AND), Bitwise OR (OR), and Set on Less Than (SLT) with the '
-                                            'specified operations.',
-                                            '4. Implement control flow instructions including Branch on Equal (BEQ), '
-                                            'Branch on Not Equal (BNE), and Jump (JMP) with the specified operations.',
-                                            '5. Design the processor control unit to generate appropriate control signals '
-                                            'for each instruction type.',
-                                            '6. Design the ALU control unit to generate the correct ALU operation based '
-                                            'on the ALUOp signal and the opcode.',
-                                            '7. Implement instruction memory, data memory, register file, ALU, ALU '
-                                            'control unit, datapath unit, and control unit modules in SystemVerilog.',
-                                            '8. Ensure the processor supports a 16-bit instruction format and operates on '
-                                            '8-bit data widths.',
-                                            '9. The processor must be capable of executing the provided instruction set '
-                                            'with correct control and data flow for each instruction type.',
-                                            '10. Verify the processor design using a testbench that simulates various '
-                                            'instruction executions and validates the functionality of the processor.']
-                                            )
-    print(hierarchical_response)
+    # tests
+    pass

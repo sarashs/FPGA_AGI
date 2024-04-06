@@ -22,6 +22,20 @@ requirement_prompt = ChatPromptTemplate.from_messages(
         ("user", "Objective:\n {objective} \n\n Context: \n {context}"),
     ]
 )
+
+webextraction_cleaner_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """
+            Your task is to clean the output of a web extractor given after "Extraction". \
+            That is to remove the nonsensical strings as well as excessive line breaks and etc. \
+            Your job is not to summarize the content.\
+            You must retain all of the equations, formulas, algorithms etc. Do not summarize.""",
+        ),
+        ("user", "Extraction:\n {extraction}"),
+    ]
+)
 #####
 
 hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
@@ -30,6 +44,9 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
             - You must expand your knowledge on the subject matter via the seach tool before committing to a response.
             - You are not responsible for designing a test bench.
             - If you are defining a top module or any other hierarchy, you must mention that in the module description.
+            - If multiple instances of the same module are needed for your design then you include multiple instances of that module and subscribt the name either with numbers or letters.
+            - If you have performed or otherwise have access to any computation that is needed or can help with coding a particular module, include that within the module notes.
+            - Do not forget that your actions take place via a function call,
 
             Use the following format:
 
