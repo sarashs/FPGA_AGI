@@ -4,7 +4,7 @@ try:
     from FPGA_AGI.parameters import RECURSION_LIMIT
     from FPGA_AGI.chains import WebsearchCleaner
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt
+    from prompts import hierarchical_agent_prompt, module_design_agent_prompt
     from parameters import RECURSION_LIMIT
     from chains import WebsearchCleaner
     from tools import search_web, python_run, Thought
@@ -20,7 +20,7 @@ import operator
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
-from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate
+from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate, BaseChatPromptTemplate
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 
@@ -33,7 +33,7 @@ class Module(BaseModel):
     description: str = Field(description="Module description.")
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    notes: str = Field(description="Self-sufficiently in formative and extensive note on any points, notes, information or computations necessary for the implementation of the module that is obtained by you.")
+    notes: str = Field(description="Self-sufficiently informative and extensive note on any points, notes, information or computations necessary for the implementation of the module that is obtained by you.")
 
 class HierarchicalResponse(BaseModel):
     """Final response to the user"""
@@ -41,21 +41,38 @@ class HierarchicalResponse(BaseModel):
         description="""List of modules"""
         )
 
-class HierarchicalAgentState(TypedDict):
+### Module Design agent
+class CodeModuleResponse(BaseModel):
+    """Final response to the user"""
+    name: str = Field(description="Name of the module.")
+    description: str = Field(description="Module description.")
+    connections: List[str] = Field(description="List of the modules connecting to this module.")
+    ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
+    module_code: str = Field(description="Complete HDL/HLS code without any placeholders or to be filled by the users.")
+    module_code: str = Field(description="Complete behavioral test for the module must be written in the same HDL/HLS language.")
+
+class FinalDesignGraph(BaseModel):
+    """Final Design Graph"""
+    graph: List[CodeModuleResponse] = Field(
+        description="""List of modules"""
+        )
+
+class GenericAgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
-    
-class HierarchicalDesignAgent(object):
-    """This agent performs a hierarchical design of the desired logic."""
-#TODO: we will have to merge the tool node into the compute node
-    def __init__(self, model: ChatOpenAI, tools: List=[search_web]):
+
+class GenericToolCallingAgent(object):
+    """This agent is a generic tool calling agent. The list of tools, prompt template and resopnse format decides what the agent actually does."""
+    def __init__(self, model: ChatOpenAI,
+                 prompt: BaseChatPromptTemplate=hierarchical_agent_prompt,
+                 tools: List=[search_web], response_format: BaseModel=HierarchicalResponse):
         tools.append(Thought)
         self.tool_executor = ToolExecutor(tools)
+        self.response_format = response_format
         functions = [convert_to_openai_function(t) for t in tools]
-        functions.append(convert_to_openai_function(HierarchicalResponse))
-        prompt = hierarchical_agent_prompt
+        functions.append(convert_to_openai_function(response_format))
         self.model = prompt | model.bind_functions(functions)
         # Define a new graph
-        self.workflow = StateGraph(HierarchicalAgentState)
+        self.workflow = StateGraph(GenericAgentState)
 
         # Define the two nodes we will cycle between
         self.workflow.add_node("agent", self.call_model)
@@ -102,7 +119,7 @@ class HierarchicalDesignAgent(object):
         if "function_call" not in last_message.additional_kwargs:
             return "end"
         # Otherwise if there is, we need to check what type of function call it is
-        elif last_message.additional_kwargs["function_call"]["name"] == "HierarchicalResponse":
+        elif last_message.additional_kwargs["function_call"]["name"] == self.response_format.__name__:
             return "end"
         # Otherwise we continue
         else:
@@ -143,7 +160,7 @@ class HierarchicalDesignAgent(object):
 
         output = self.app.invoke(messages, {"recursion_limit": RECURSION_LIMIT})
         out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
-        out = HierarchicalResponse.parse_obj(out)
+        out = self.response_format.parse_obj(out)
         return out
 
     def stream(self, messages):
@@ -155,6 +172,10 @@ class HierarchicalDesignAgent(object):
                 print("---")
                 print(value)
                 print("\n---\n")
+        out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
+        out = self.response_format.parse_obj(out)
+        return out   
+### 
 
 class ResearcherResponse(BaseModel):
     """Final response to the user"""
@@ -334,7 +355,13 @@ class Researcher(object):
         self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run])
 
     #### Hierarchical Design Agent
-        self.hierarchical_design_agent = HierarchicalDesignAgent(model)
+        self.hierarchical_design_agent = GenericToolCallingAgent(model=model)
+
+    #### Module Design Agent
+        self.module_design_agent = GenericToolCallingAgent(
+            model=model, prompt=module_design_agent_prompt,
+            tools=[search_web, python_run], response_format=CodeModuleResponse
+            )
 
         self.workflow = StateGraph(ResearcherAgentState)
 
@@ -344,7 +371,8 @@ class Researcher(object):
         self.workflow.add_node("compute", self.compute)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
-        self.workflow.add_node("hierarchical_solution", self.hierarchical_solution) 
+        self.workflow.add_node("hierarchical_solution", self.hierarchical_solution)
+        self.workflow.add_node("modular_design", self.modular_design) 
         self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
@@ -370,7 +398,8 @@ class Researcher(object):
         )
         self.workflow.add_edge("search_the_web", "researcher")
         self.workflow.add_edge("compute", "researcher")
-        self.workflow.add_edge("hierarchical_solution", END)
+        self.workflow.add_edge("hierarchical_solution", "modular_design")
+        self.workflow.add_edge("modular_design" ,END)
 
         # Compile
         self.app = self.workflow.compile()
@@ -553,6 +582,8 @@ class Researcher(object):
         else:
             return "researcher"
 
+    def modular_design(self, state):
+        pass
 
     def invoke(self, goals, requirements, input_context):
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)

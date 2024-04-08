@@ -58,6 +58,24 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
 ]
 )
 
+module_design_agent_prompt = ChatPromptTemplate.from_messages(
+    [SystemMessage(content="""You are an FPGA design engineer whose purpose is to code the modules along with test cases for an HDL/HLS hardware project.
+            You are being called in an iterative fashion and at each stage you are provided with the whole design architecture in json format as well as the module you will be designing at the moment.
+            - You are responsible for wrtitng complete synthasizable code without any placeholders or empty spots.
+            - You are ecounraged to think before you commit to writing the code.
+            - You can alsouse the tools provided to you if you need to search or compute anything.
+            - Do not forget that your actions take place via a function call,
+
+            Use the following format:
+
+            Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
+            Action: the action to take, should be one of the functions you have access to.
+            ... (this Thought/Action can repeat 3 times)
+            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
+            MessagesPlaceholder(variable_name="messages"),
+]
+)
+
 # The following prompt prepares message for the hirearchical design agent based only on goals and requirements
 hierarchical_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the architecture graph for the following goals and requirements.
         Goals:
