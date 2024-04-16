@@ -19,7 +19,7 @@ def search_web(keywords: str):
 ### Python run tool
 
 @tool
-def python_run(code: Annotated[str, "The python code to execute to generate your chart."]):
+def python_run(code: Annotated[str, "The python code to execute to generate your results."]) -> str:
     """Use this to execute python code. If you want to see the output of a value,
     you should print it out with `print(...)`."""
     if 'print' in code:
@@ -40,8 +40,8 @@ def python_run(code: Annotated[str, "The python code to execute to generate your
 ### Thought tool
 
 @tool
-def Thought(thought: str):
-    """A thought happes via a function call to this function where the thought is passed to this function."""
+def Thought(thought: Annotated[str, "The thought that you came up with."]) -> str:
+    """A thought happes via a function call to this function. You must pass your thought as an argument."""
     return f'Your thought is: {thought}'
 
 ### RAG tool

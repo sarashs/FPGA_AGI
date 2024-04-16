@@ -39,10 +39,13 @@ webextraction_cleaner_prompt = ChatPromptTemplate.from_messages(
 #####
 
 hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
-    [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project.
-            You are deciding on the module names, description, ports, what modules each module is connected to. You also include notes on anything that may be necessary in order for the downstream logic designers.
-            - You must expand your knowledge on the subject matter via the seach tool before committing to a response.
-            - You are not responsible for designing a test bench.
+    [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project. Your design will be used by a HDL/HLS coder to write the modules.
+            The HDL/HSL coder agent only knows how to code. It cannot perform any computations or do any independent designs. It needs all the technical information necessary to code the modules. \
+            - You will receive guidelines from the researcher agent on what you need to design.
+            - You are deciding on the module names, description, ports, what modules each module is connected to.
+            - You also include anything that may be necessary in order for the downstream HDL/HSL coder in the description. This includes any search results or computations performed by other agents that are used for coding a particular module. This is a very important requirement.
+            - If necessary, you can expand your knowledge on the subject matter via the search tool before committing to a response.
+            - You are not responsible for designing any test benches.
             - If you are defining a top module or any other hierarchy, you must mention that in the module description.
             - If multiple instances of the same module are needed for your design then you include multiple instances of that module and subscribt the name either with numbers or letters.
             - If you have performed or otherwise have access to any computation that is needed or can help with coding a particular module, include that within the module notes.
@@ -51,7 +54,7 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
             Use the following format:
 
             Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
-            Action: the action to take, should be one of the functions you have access to.
+            Action: You take an action through calling the search_web tool.
             ... (this Thought/Action can repeat 3 times)
             Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
             MessagesPlaceholder(variable_name="messages"),
@@ -61,27 +64,46 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
 module_design_agent_prompt = ChatPromptTemplate.from_messages(
     [SystemMessage(content="""You are an FPGA design engineer whose purpose is to code the modules along with test cases for an HDL/HLS hardware project.
             You are being called in an iterative fashion and at each stage you are provided with the whole design architecture in json format as well as the module you will be designing at the moment.
-            - You are responsible for wrtitng complete synthasizable code without any placeholders or empty spots.
-            - You are ecounraged to think before you commit to writing the code.
-            - You can alsouse the tools provided to you if you need to search or compute anything.
-            - Do not forget that your actions take place via a function call,
+            - You are responsible for writitng complete synthasizable code.
+            - You are not allowed to leave any placeholders in the code. You must write complete synthesizable code.
+            - You are not going to ask the user to write the code but rather you gather information and write codes on your own.
+            - You can use the tools provided to you if you need to search or compute anything.
+            - You must think or take actions via a function calls,
 
             Use the following format:
 
-            Thought: You should think of an action. You do this by calling the Though tool/function. This is the only way to think.
-            Action: the action to take, should be one of the functions you have access to.
+            Thought: You should think of an action. You do this by calling the Thought tool/function. This is the only way to think.
+            Action: You take an action through calling one of the search_web or python_run tools.
             ... (this Thought/Action can repeat 3 times)
-            Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
+            Response: You Must use the CodeModuleResponse tool to format your response. Do not return your final response without using the CodeModuleResponse tool"""),
             MessagesPlaceholder(variable_name="messages"),
 ]
 )
 
 # The following prompt prepares message for the hirearchical design agent based only on goals and requirements
-hierarchical_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the architecture graph for the following goals and requirements.
+hierarchical_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the architecture graph for the following goals and requirements. 
         Goals:
         {goals}
         
         Requirements:
         {requirements}
         """)
-#####
+# The following prompt prepares message for the module design agent
+module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
+    """Write the HLS/HDL code in verilog for the following desgin. Note that the design consists of modules with\
+    input/output and connecting modules already designed for you. Your task is to build the modules consistently with the modules that you have already build and with the overal desing.\
+    note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
+    Remember to write complete synthesizable module code without placeholders.
+
+    Hierarchical design:
+    {hierarchical_design}
+                                                                 
+    Modules built so far:
+    {modules_built}
+    
+    Current Module:
+    {current_module}
+
+    you must always use the CodeModuleResponse tool for your final response.
+    """
+    )

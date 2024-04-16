@@ -1,9 +1,13 @@
 from langchain_core.runnables import Runnable
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, BaseChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain.chains.openai_functions import create_structured_output_runnable
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from typing import Dict, List, Optional, Any, Union
+from langchain.output_parsers import PydanticToolsParser
 from FPGA_AGI.prompts import requirement_prompt, webextraction_cleaner_prompt
 
+# requirement chain
 class Requirements(BaseModel):
     """Project requirements"""
 
@@ -31,7 +35,7 @@ class RequirementChain(Runnable):
         )
         return requirement_runnable
 
-
+# web cleaner chain
 class CleanedWeb(BaseModel):
     """Project requirements"""
 
@@ -47,5 +51,20 @@ class WebsearchCleaner(Runnable):
         )
         return requirement_runnable
 
+# planner chain
+
+class Plan(BaseModel):
+    """Plan to follow in future"""
+    steps: List[str] = Field(
+        description="different steps to follow, should be in sorted order"
+    )
+
+class Planner(Runnable):
+    @classmethod
+    def from_llm_and_prompt(cls, llm, prompt):
+        requirement_runnable = create_structured_output_runnable(
+            Plan, llm, prompt
+        )
+        return requirement_runnable
 if __name__=='__main__':
     pass

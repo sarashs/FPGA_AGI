@@ -1,15 +1,15 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-    from FPGA_AGI.prompts import hierarchical_agent_prompt
+    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, module_agent_prompt_human
     from FPGA_AGI.parameters import RECURSION_LIMIT
-    from FPGA_AGI.chains import WebsearchCleaner
+    from FPGA_AGI.chains import WebsearchCleaner, Planner
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt, module_design_agent_prompt
+    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, module_agent_prompt_human
     from parameters import RECURSION_LIMIT
-    from chains import WebsearchCleaner
+    from chains import WebsearchCleaner, Planner
     from tools import search_web, python_run, Thought
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, BaseChatPromptTemplate
 import json
 from langgraph.prebuilt import ToolExecutor
 from langchain_core.pydantic_v1 import BaseModel, Field
@@ -20,7 +20,7 @@ import operator
 from langgraph.prebuilt import ToolInvocation
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, FunctionMessage
-from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate, BaseChatPromptTemplate
+#from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate, BaseChatPromptTemplate
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 
@@ -30,13 +30,13 @@ from pprint import pprint
 class Module(BaseModel):
     """module definition"""
     name: str = Field(description="Name of the module.")
-    description: str = Field(description="Module description.")
+    description: str = Field(description="Module description including detailed explanation of what the module does and how to achieve it. Think of it as a code equivalent of the module without coding it.")
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    notes: str = Field(description="Self-sufficiently informative and extensive note on any points, notes, information or computations necessary for the implementation of the module that is obtained by you.")
 
 class HierarchicalResponse(BaseModel):
     """Final response to the user"""
+    design_document: str = Field(description="Description of the design based on the compiled message exchanges provided.")
     graph: List[Module] = Field(
         description="""List of modules"""
         )
@@ -45,11 +45,11 @@ class HierarchicalResponse(BaseModel):
 class CodeModuleResponse(BaseModel):
     """Final response to the user"""
     name: str = Field(description="Name of the module.")
-    description: str = Field(description="Module description.")
+    description: str = Field(description="Brief module description.")
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    module_code: str = Field(description="Complete HDL/HLS code without any placeholders or to be filled by the users.")
-    module_code: str = Field(description="Complete behavioral test for the module must be written in the same HDL/HLS language.")
+    module_code: str = Field(description="Complete working synthesizable HDL/HLS code without any placeholders.")
+    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the same HDL/HLS language.")
 
 class FinalDesignGraph(BaseModel):
     """Final Design Graph"""
@@ -78,23 +78,13 @@ class GenericToolCallingAgent(object):
         self.workflow.add_node("agent", self.call_model)
         self.workflow.add_node("action", self.call_tool)
 
-        # Set the entrypoint as `agent`
-        # This means that this node is the first one called
         self.workflow.set_entry_point("agent")
 
         # We now add a conditional edge
         self.workflow.add_conditional_edges(
-            # First, we define the start node. We use `agent`.
-            # This means these are the edges taken after the `agent` node is called.
             "agent",
             # Next, we pass in the function that will determine which node is called next.
             self.should_continue,
-            # Finally we pass in a mapping.
-            # The keys are strings, and the values are other nodes.
-            # END is a special node marking that the graph should finish.
-            # What will happen is we will call `should_continue`, and then the output of that
-            # will be matched against the keys in this mapping.
-            # Based on which one it matches, that node will then be called.
             {
                 # If `tools`, then we call the tool node.
                 "continue": "action",
@@ -117,6 +107,9 @@ class GenericToolCallingAgent(object):
         last_message = messages[-1]
         # If there is no function call, then we finish
         if "function_call" not in last_message.additional_kwargs:
+            print("---Error---")
+            print(last_message)
+            raise ValueError("The message must be a function call")
             return "end"
         # Otherwise if there is, we need to check what type of function call it is
         elif last_message.additional_kwargs["function_call"]["name"] == self.response_format.__name__:
@@ -151,10 +144,10 @@ class GenericToolCallingAgent(object):
         # We use the response to create a FunctionMessage
         function_message = FunctionMessage(content=str(response), name=action.tool)
         # We return a list, because this will get added to the existing list
-        if last_message.additional_kwargs["function_call"]["name"] != 'Thought':
-            return {"messages": [function_message]}
-        else:
-            return
+        #if last_message.additional_kwargs["function_call"]["name"] != 'Thought':
+        return {"messages": [function_message]}
+        #else:
+        #    return
 
     def invoke(self, messages):
 
@@ -171,8 +164,8 @@ class GenericToolCallingAgent(object):
                 print(f"Output from node '{key}':")
                 print("---")
                 print(value)
-                print("\n---\n")
-        out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
+                print("\n---\n")  
+        out = json.loads(output['__end__']['messages'][-1].additional_kwargs["function_call"]["arguments"])
         out = self.response_format.parse_obj(out)
         return out   
 ### 
@@ -207,38 +200,26 @@ class Researcher(object):
         self.retriever = retriever
         self.model = model
         self.webcleaner = WebsearchCleaner.from_llm(llm=model)
+        self.requirements = None
+        self.goals = None
 
         #### Plan Agent
-        class Plan(BaseModel):
-            """Plan to follow in future"""
-
-            steps: List[str] = Field(
-                description="different steps to follow, should be in sorted order"
-            )
-            
-        # Tool
-        plan_tool_oai = convert_to_openai_tool(Plan)
-
-        # Parser
-        plan_parser_tool = PydanticToolsParser(tools=[Plan])
-
-        # LLM with tool and enforce invocation
-        planner_with_tool = self.model.bind(
-            tools=[plan_tool_oai],
-            tool_choice={"type": "function", "function": {"name": "Plan"}},
-        )
 
         # prompt
         planner_prompt = ChatPromptTemplate.from_messages(
             [(
                     "system",
-                    """You are a hardware design engineer and your purpose is to come up with a step by step plan that will enable the design engineers to actually design a hardware based on the set of goals, requirements and the context given by the user. \
-                    This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. You are not responsible for simulations and testing. You are only responsible for design. \
-                    Your steps should consist of:
-                    - search when something needs to be searched via the internet or corpus of data. \
-                    - computes when something needs to be computed via writing a python code. This should include parameters, functions etc that would be coded into the final design. For example generating the values for a lookup table implementation of a non-linear function is a compute step.\
-                    - solution when we have all of the necessary information for enerating the final design. \
-                    The result of the final step should be "solution: writing the final design in the form of an HDL/HLS code." Make sure that each step has all the information needed - do not skip steps."""
+                    """You are a hardware engineering literature review agent and your purpose is to come up with a step by step list to:
+                        1. Collect information (search). You essentially come up with an exhaustive list of queries/searches.
+                        2. Write a literature review report based on the collected information (report).
+                        This list should involve individual tasks, that if executed correctly will yield the correct answer.
+                        Do not add any superfluous steps. You are not responsible for the actual design. You are only responsible for literature review.
+                        Your list of questions must be sorted in a top down manner. That is you start with your general questions, followed by more detailled question regarding implementaion methodology etc.
+                        As per above your steps should consist of:\
+                        - search: make sure that it starts with "search:" followed by the information you are searching. This should be simple, single search quaries not a search objective.
+                        - report: we you have collected enough information to write a literature review. Make sure this step starts with "report:"
+                        Your final step should always be report, that is when we have all of the necessary information to write a design document. \
+                        Make sure that your steps consists of meaningful and specific questions, geard towards the goals and requirements of the design - do not skip steps."""
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
@@ -251,11 +232,8 @@ class Researcher(object):
                     {requirements}
                     user input context:
                     {input_context}""")
-        # Chain
-        self.planner_agent = (planner_prompt
-            | planner_with_tool
-            | plan_parser_tool
-        )
+
+        self.planner_chain = Planner.from_llm_and_prompt(llm=model, prompt=planner_prompt)
     #### Research Agent
         class decision(BaseModel):
             """Decision regarding the next step of the process"""
@@ -340,6 +318,7 @@ class Researcher(object):
         You must print the results in your response no matter how long or large they might be. 
         You must completely print the results. Do not leave any place holders. Do not use ... 
         Do not ask for clarification. You also do not refuse to answer the question.
+        retrun your response as some explaination of what the response is about plus the actual response.
         Your other team members (and other teams) will collaborate with you with their own specialties."""
         compute_agent_prompt = ChatPromptTemplate.from_messages(
             [
@@ -352,7 +331,8 @@ class Researcher(object):
             ]
         )
         agent_with_tool = create_openai_tools_agent(self.model, [python_run], compute_agent_prompt)
-        self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run])
+        self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run], verbose=True)
+        
 
     #### Hierarchical Design Agent
         self.hierarchical_design_agent = GenericToolCallingAgent(model=model)
@@ -418,7 +398,7 @@ class Researcher(object):
         """
         messages = state["messages"]
         print(messages)
-        response = self.planner_agent.invoke({"messages": messages})
+        response = self.planner_chain.invoke({"messages": messages})
         steps = response[0].steps
         if not len(steps) > 0:
             raise AssertionError("The planner step failed to generate any plans")
@@ -426,9 +406,7 @@ class Researcher(object):
         return{
         "messages": [message],
         "sender": "planner",
-        "keys": {
-                 "remaining_steps":steps,
-                 }
+        "remaining_steps":steps,
         }
      
     def researcher(self, state):
@@ -442,7 +420,7 @@ class Researcher(object):
             state (dict): New key added to state, documents, that contains retrieved documents
         """
         messages = state["messages"]
-        remaining_steps = state["keys"]["remaining_steps"]
+        remaining_steps = state["remaining_steps"]
         current_step = remaining_steps.pop(0)
         messages.append(HumanMessage(f"current step is:\n {current_step}", name="planner"))
         response = self.research_agent.invoke({"messages": messages})
@@ -454,30 +432,30 @@ class Researcher(object):
         else:
             message = HumanMessage(response[0].search, name="researcher")
         return{
-        "messages": [HumanMessage(f"current step is:\n {current_step}"), message],
+        "messages": [message],
         "sender": "researcher",
+        "remaining_steps":remaining_steps,
         "keys": {
             "decision": decision,
             "search": search,
             "compute": compute,
-            "remaining_steps":remaining_steps,
             }
         }
 
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
         state_dict = state["keys"]
-        remaining_steps = state_dict["remaining_steps"]
+        remaining_steps = state["remaining_steps"]
         question = state_dict["search"]
         documents = self.retriever.get_relevant_documents(question)
-        return {"keys": {"documents": documents, "search": question, "remaining_steps": remaining_steps}}
+        return {"keys": {"documents": documents, "search": question}, "remaining_steps": remaining_steps}
 
     def relevance_grade(self, state):
         print("---CHECK RELEVANCE---")
         state_dict = state["keys"]
         question = state_dict["search"]
         documents = state_dict["documents"]
-        remaining_steps = state_dict["remaining_steps"]
+        remaining_steps = state["remaining_steps"]
         # Score
         filtered_docs = []
         for d in documents:
@@ -491,11 +469,11 @@ class Researcher(object):
                 continue
         if len(filtered_docs) == 0:
             return {
+                "remaining_steps": remaining_steps,
                 "keys": {
                     "filtered_docs": filtered_docs,
                     "search": question,
                     "run_web_search": "Yes",
-                    "remaining_steps": remaining_steps,
                 }
             }
         else:
@@ -503,11 +481,11 @@ class Researcher(object):
             return {
                 "messages": [result],
                 "sender": "search",
+                "remaining_steps": remaining_steps,
                 "keys": {
                     "filtered_docs": filtered_docs,
                     "search": question,
-                    "run_web_search": "No",
-                    "remaining_steps": remaining_steps,
+                    "run_web_search": "No",     
                 }
             }
         
@@ -526,7 +504,7 @@ class Researcher(object):
         state_dict = state["keys"]
         question = state_dict["search"]
         documents = state_dict["filtered_docs"]
-        remaining_steps = state_dict["remaining_steps"]
+        remaining_steps = state["remaining_steps"]
 
         tool = TavilySearchResults()
         docs = tool.invoke({"query": question})
@@ -551,9 +529,8 @@ class Researcher(object):
     def compute(self, state):
 
         print("---Compute---")
-        state_dict = state["keys"]
         messages = state["messages"]
-        remaining_steps = state_dict["remaining_steps"]
+        remaining_steps = state["remaining_steps"]
         result = self.compute_agent.invoke({"messages": messages})
         result = HumanMessage(result['output'], name="compute")
         return {
@@ -563,15 +540,36 @@ class Researcher(object):
         }
 
     def hierarchical_solution(self, state):
+        print("---Hierarchical design---")
+        messages = "\n".join([str(item) if item.name in ['compute', 'search'] else '' for item in state["messages"]])
+        input_message = HumanMessage(f"""Design the architecture graph for the following goals and requirements. \
+        some of the research that you need to consider for your design is provided after research.
+        Goals:
+        {str(self.goals)}
+        
+        Requirements:
+        {str(self.requirements)}
+    
+        research:
+        {messages}
+        """, name="researcher"
+                                 )
+                                 
         hierarchical_design = self.hierarchical_design_agent.invoke(
             {
-                "messages" : state["messages"],
+                "messages" : [input_message],
                 }
             )
-        with open('hierarchical_design.json', 'w') as f:
-            json.dump(hierarchical_design.json(), f)
-        with open("messages.md", "w") as f:
-            f.write("\n".join([item.content for item in state["messages"]]))
+        result = HumanMessage(str(hierarchical_design), name="designer")
+        with open('solution.txt', 'w+') as file:
+            file.write(str(hierarchical_design))
+        1/0
+
+        return{
+            "messages": [result],
+            "sender": "designer",
+            "keys": {"hierarchical_design": hierarchical_design},
+        }
 
     def decide_to_websearch(self, state):
  
@@ -583,14 +581,36 @@ class Researcher(object):
             return "researcher"
 
     def modular_design(self, state):
-        pass
+        print("---Modular design---")
+        state_dict = state["keys"]
+        hierarchical_design = state_dict["hierarchical_design"]
+        Modules = []
+        print("modular design")
+        for module in hierarchical_design.graph:
+            response = self.module_design_agent.invoke(
+                {
+                    "messages": module_agent_prompt_human.format_messages(
+                        hierarchical_design=str(hierarchical_design.graph),
+                        modules_built=str(Modules), 
+                        current_module=str(module)
+                        )
+                    }
+                )
+            Modules.append(response)
+            with open(f"{module.name}.v", "w") as f:
+                f.write(response.module_code)
+        return
 
     def invoke(self, goals, requirements, input_context):
+        self.requirements = requirements
+        self.goals = goals
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
         output = self.app.invoke({"messages": human_message}, {"recursion_limit": RECURSION_LIMIT})
         return output
 
     def stream(self, goals, requirements, input_context):
+        self.requirements = requirements
+        self.goals = goals
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
         for output in self.app.stream({"messages": human_message}, {"recursion_limit": RECURSION_LIMIT}):
         # stream() yields dictionaries with output keyed by node name
@@ -598,4 +618,11 @@ class Researcher(object):
             print("----")
 if __name__ == "__main__":
     # tests
-    pass
+                a=  """You are an R&D planner and your purpose is to come up with a step by step plan that will enable the design engineers to actually design a hardware based on the set of goals, requirements and the context given by the user. \
+                    This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. You are not responsible for simulations and testing. You are only responsible for design. \
+                    Your steps should consist of:
+                    - search when something needs to be searched via the internet or corpus of data. \
+                    - computes when something needs to be computed "via writing a python code". This should include parameters, functions etc that would be coded into the final design. For example generating the values for a lookup table implementation of a non-linear function is a compute step.\
+                    - solution when we have all of the necessary information for enerating the final design. \
+                    The result of the final step should be "solution: writing the final design in the form of an HDL/HLS code." Make sure that each step has all the information needed - do not skip steps."""
+    
