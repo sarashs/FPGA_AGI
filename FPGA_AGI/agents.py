@@ -2,11 +2,11 @@ try:
     from FPGA_AGI.tools import search_web, python_run, Thought
     from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, module_agent_prompt_human
     from FPGA_AGI.parameters import RECURSION_LIMIT
-    from FPGA_AGI.chains import WebsearchCleaner, Planner
+    from FPGA_AGI.chains import WebsearchCleaner, Planner, LiteratureReview
 except ModuleNotFoundError:
     from prompts import hierarchical_agent_prompt, module_design_agent_prompt, module_agent_prompt_human
     from parameters import RECURSION_LIMIT
-    from chains import WebsearchCleaner, Planner
+    from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
 
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, BaseChatPromptTemplate
@@ -183,12 +183,10 @@ class ResearcherAgentState(TypedDict):
 
     Attributes:
         keys: A dictionary where each key is a string.
-        remaining_steps: A list consisting of the step by step plan.
         messages: The commumications between the agents
         sender: The agent who is sending the message
     """
     keys: Dict[str, any]
-    remaining_steps: List[str]
     messages: Annotated[Sequence[BaseMessage], operator.add]
     sender: str
 
@@ -209,23 +207,40 @@ class Researcher(object):
         planner_prompt = ChatPromptTemplate.from_messages(
             [(
                     "system",
-                    """You are a hardware engineering literature review agent and your purpose is to come up with a step by step list to:
-                        1. Collect information (search). You essentially come up with an exhaustive list of queries/searches.
-                        2. Write a literature review report based on the collected information (report).
-                        This list should involve individual tasks, that if executed correctly will yield the correct answer.
-                        Do not add any superfluous steps. You are not responsible for the actual design. You are only responsible for literature review.
-                        Your list of questions must be sorted in a top down manner. That is you start with your general questions, followed by more detailled question regarding implementaion methodology etc.
-                        As per above your steps should consist of:\
-                        - search: make sure that it starts with "search:" followed by the information you are searching. This should be simple, single search quaries not a search objective.
-                        - report: we you have collected enough information to write a literature review. Make sure this step starts with "report:"
-                        Your final step should always be report, that is when we have all of the necessary information to write a design document. \
-                        Make sure that your steps consists of meaningful and specific questions, geard towards the goals and requirements of the design - do not skip steps."""
+                    """
+**Objective:** You are programmed as a hardware engineering literature review agent. Your purpose is to autonomously generate a step-by-step list of web search queries that will aid in gathering both comprehensive and relevant information about hardware design, adaptable across various FPGA platforms without being overly specific to any single device.
+
+**Follow these instructions when generating the queries:**
+
+*   **Focus on Practicality and Broad Applicability:** Ensure each search query is practical and likely to result in useful findings. Avoid queries that are too narrow or device-specific which may not yield significant search results.
+*   **Sequential and Thematic Structure:** Organize questions to start from broader concepts and architectures, gradually narrowing down to specific challenges and solutions relevant to a wide range of FPGA platforms.
+*   **Contextually Rich and Insightful Inquiries:** Avoid overly broad or vague topics that do not facilitate actionable insights. The list of questions should involve individual tasks, that if searched on the will yield specific results. Do not add any superfluous questions.
+*   **Use of Technical Terminology with Caution:** While technical terms should be used to enhance query relevance, ensure they are not used to create highly specific questions that are unlikely to be answered by available literature.
+*   **Clear and Structured Format:** Queries should be clear and direct, with each starting with "search:" followed by a practical, result-oriented question. End with a "report:" task to synthesize findings into a comprehensive literature review.
+
+**For each of the following general topics, break them down into at least 3 sub-topics and generate queries for them:**
+
+1.  **General Overview:** Start with an overview of common specifications and architectures, related to the project goal. avoiding overly specific details related to any single model or board.
+2.  **Existing Solutions and Case Studies:** Investigate a range of implementations and case studies focusing on digital signal processing tasks like FFT on FPGAs, ensuring a variety of platforms are considered.
+3.  **Foundational Theories:** Delve into the theories and methodologies underpinning FPGA applications.
+4.  **Common Technical Challenges:** Identify and explore common technical challenges associated with FPGA implementations, discussing broadly applicable solutions.
+5.  **Optimization and Implementation Techniques:**Identify effective strategies and techniques for optimizing FPGA designs, applicable across different types of hardware.
+6.  **Hardware specific Optimization :** Conclude with effective strategies and techniques for optimizing FPGA designs for the specific hardware (if a specific platform is provided to you).
+
+**Final Task:**
+
+*   **report:** Synthesize all information into a structured and comprehensive literature review that is informative and applicable to hardware designers working with various FPGA platforms.
+
+Example of a Specific Query Formation:
+
+search: "Assess the impact of out-of-order execution versus in-order execution on power efficiency and processing speed in ARM Cortex processors."
+"""
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
         )
         # This is the input prompt for when the object is invoked or streamed
-        self.planner_agent_prompt_human = HumanMessagePromptTemplate.from_template("""You are planning the procedure for the following. Your goal is to collect all the data and perform all the computation necessary for another hardware engineer to build the design seamlessly.
+        self.planner_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the literature review set of questions for the following goals and requirements. Be considerate of the user input context.
                     goals:
                     {goals}
                     requirements:
@@ -234,6 +249,56 @@ class Researcher(object):
                     {input_context}""")
 
         self.planner_chain = Planner.from_llm_and_prompt(llm=model, prompt=planner_prompt)
+
+        #### literature review Agent
+
+        # prompt
+        lit_review_prompt = ChatPromptTemplate.from_messages(
+            [(
+                    "system",
+                    """
+**Objective:** You are programmed as a hardware engineering literature review agent. Your purpose is to autonomously generate a step-by-step list of web search queries that will aid in gathering both comprehensive and relevant information about hardware design, adaptable across various FPGA platforms without being overly specific to any single device.
+
+**Follow these instructions when generating the queries:**
+
+*   **Focus on Practicality and Broad Applicability:** Ensure each search query is practical and likely to result in useful findings. Avoid queries that are too narrow or device-specific which may not yield significant search results.
+*   **Sequential and Thematic Structure:** Organize questions to start from broader concepts and architectures, gradually narrowing down to specific challenges and solutions relevant to a wide range of FPGA platforms.
+*   **Contextually Rich and Insightful Inquiries:** Avoid overly broad or vague topics that do not facilitate actionable insights. The list of questions should involve individual tasks, that if searched on the will yield specific results. Do not add any superfluous questions.
+*   **Use of Technical Terminology with Caution:** While technical terms should be used to enhance query relevance, ensure they are not used to create highly specific questions that are unlikely to be answered by available literature.
+*   **Clear and Structured Format:** Queries should be clear and direct, with each starting with "search:" followed by a practical, result-oriented question. End with a "report:" task to synthesize findings into a comprehensive literature review.
+
+**For each of the following general topics, break them down into at least 3 sub-topics and generate queries for them:**
+
+1.  **General Overview:** Start with an overview of common specifications and architectures, related to the project goal. avoiding overly specific details related to any single model or board.
+2.  **Existing Solutions and Case Studies:** Investigate a range of implementations and case studies focusing on digital signal processing tasks like FFT on FPGAs, ensuring a variety of platforms are considered.
+3.  **Foundational Theories:** Delve into the theories and methodologies underpinning FPGA applications.
+4.  **Common Technical Challenges:** Identify and explore common technical challenges associated with FPGA implementations, discussing broadly applicable solutions.
+5.  **Optimization and Implementation Techniques:**Identify effective strategies and techniques for optimizing FPGA designs, applicable across different types of hardware.
+6.  **Hardware specific Optimization :** Conclude with effective strategies and techniques for optimizing FPGA designs for the specific hardware (if a specific platform is provided to you).
+
+**Final Task:**
+
+*   **report:** Synthesize all information into a structured and comprehensive literature review that is informative and applicable to hardware designers working with various FPGA platforms.
+
+Example of a Specific Query Formation:
+
+search: "Assess the impact of out-of-order execution versus in-order execution on power efficiency and processing speed in ARM Cortex processors."
+"""
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+        # This is the input prompt for when the object is invoked or streamed
+        self.lit_review_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the literature review set of questions for the following goals and requirements. Be considerate of the user input context.
+                    goals:
+                    {goals}
+                    requirements:
+                    {requirements}
+                    user input context:
+                    {input_context}""")
+
+        self.lit_review_chain = LiteratureReview.from_llm_and_prompt(llm=model, prompt=lit_review_prompt)
+
     #### Research Agent
         class decision(BaseModel):
             """Decision regarding the next step of the process"""
@@ -346,7 +411,8 @@ class Researcher(object):
         self.workflow = StateGraph(ResearcherAgentState)
 
         # Define the nodes
-        self.workflow.add_node("planner", self.planner)
+        self.workflow.add_node("lit_questions", self.lit_questions)
+        self.workflow.add_node("lit_review", self.lit_review)
         self.workflow.add_node("researcher", self.researcher)
         self.workflow.add_node("compute", self.compute)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
@@ -356,8 +422,17 @@ class Researcher(object):
         self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
-        self.workflow.set_entry_point("planner")
-        self.workflow.add_edge("planner", "researcher")
+        self.workflow.set_entry_point("lit_questions")
+        self.workflow.add_edge("lit_questions", "lit_review")
+        self.workflow.add_edge("lit_review", "researcher")
+        self.workflow.add_conditional_edges(
+            "lit_review",
+            (lambda x: x['keys']['decision']),
+            {
+                "search": "retrieve_documents",
+                "design": "researcher",
+            },
+        )
         self.workflow.add_conditional_edges(
             "researcher",
             (lambda x: x['keys']['decision']),
@@ -386,7 +461,7 @@ class Researcher(object):
         
     # States
 
-    def planner(self, state):
+    def lit_questions(self, state):
         """
         First node that generates an initial plan
 
@@ -399,16 +474,52 @@ class Researcher(object):
         messages = state["messages"]
         print(messages)
         response = self.planner_chain.invoke({"messages": messages})
-        steps = response[0].steps
+        try:
+            steps = response[0].steps
+        except TypeError:
+            steps = response.steps
         if not len(steps) > 0:
-            raise AssertionError("The planner step failed to generate any plans")
-        message = HumanMessage("The plan as per the planner agent is as follows:" + "\n -".join(steps), name="planner")
+            raise AssertionError("The lit_questions step failed to generate any plans")
+        message = HumanMessage("The set of questions for literature review is as follows:" + "\n -".join(steps), name="lit_questions")
         return{
         "messages": [message],
-        "sender": "planner",
-        "remaining_steps":steps,
+        "sender": "lit_questions",
+        "keys":{"remaining_steps":steps},
         }
-     
+
+    def lit_review(self, state):
+        """
+        Prepare a literature review. 
+
+        Args:
+            state (dict): The current graph state
+
+        Returns:
+            state (dict): New key added to state, documents, that contains retrieved documents
+        """
+        messages = state["messages"]
+        remaining_steps = state["keys"]["remaining_steps"]
+        current_step = remaining_steps.pop(0)
+        if "report:" in current_step.lower():
+            decision = "design"
+            #literature_review = self.lit_review_chain.invoke
+            literature_review = None
+            return{
+            "keys": {
+                "decision": decision,
+                "literature_review": literature_review,
+                }
+            }
+        else:
+            decision = "search"
+            search = current_step[len("search:"):] if current_step.lower().startswith("search:") else current_step
+            return{
+            "keys": {
+                "remaining_steps":remaining_steps,
+                "decision": decision,
+                "search": search,
+                }
+            }
     def researcher(self, state):
         """
         manage the data collection/computation processes.
@@ -420,9 +531,9 @@ class Researcher(object):
             state (dict): New key added to state, documents, that contains retrieved documents
         """
         messages = state["messages"]
-        remaining_steps = state["remaining_steps"]
+        remaining_steps = state["keys"]["remaining_steps"]
         current_step = remaining_steps.pop(0)
-        messages.append(HumanMessage(f"current step is:\n {current_step}", name="planner"))
+        messages.append(HumanMessage(f"current step is:\n {current_step}", name="lit_questions"))
         response = self.research_agent.invoke({"messages": messages})
         decision = response[0].decision.lower()
         search = response[0].search.lower()
@@ -434,8 +545,8 @@ class Researcher(object):
         return{
         "messages": [message],
         "sender": "researcher",
-        "remaining_steps":remaining_steps,
         "keys": {
+            "remaining_steps":remaining_steps,
             "decision": decision,
             "search": search,
             "compute": compute,
@@ -445,17 +556,17 @@ class Researcher(object):
     def retrieve_documents(self, state):
         print("---RETRIEVE---")
         state_dict = state["keys"]
-        remaining_steps = state["remaining_steps"]
+        remaining_steps = state_dict["remaining_steps"]
         question = state_dict["search"]
         documents = self.retriever.get_relevant_documents(question)
-        return {"keys": {"documents": documents, "search": question}, "remaining_steps": remaining_steps}
+        return {"keys": {"documents": documents, "search": question, "remaining_steps":remaining_steps}}
 
     def relevance_grade(self, state):
         print("---CHECK RELEVANCE---")
         state_dict = state["keys"]
         question = state_dict["search"]
         documents = state_dict["documents"]
-        remaining_steps = state["remaining_steps"]
+        remaining_steps = state_dict["remaining_steps"]
         # Score
         filtered_docs = []
         for d in documents:
@@ -469,8 +580,8 @@ class Researcher(object):
                 continue
         if len(filtered_docs) == 0:
             return {
-                "remaining_steps": remaining_steps,
                 "keys": {
+                    "remaining_steps":remaining_steps,
                     "filtered_docs": filtered_docs,
                     "search": question,
                     "run_web_search": "Yes",
@@ -481,8 +592,8 @@ class Researcher(object):
             return {
                 "messages": [result],
                 "sender": "search",
-                "remaining_steps": remaining_steps,
                 "keys": {
+                    "remaining_steps":remaining_steps,
                     "filtered_docs": filtered_docs,
                     "search": question,
                     "run_web_search": "No",     
@@ -504,7 +615,7 @@ class Researcher(object):
         state_dict = state["keys"]
         question = state_dict["search"]
         documents = state_dict["filtered_docs"]
-        remaining_steps = state["remaining_steps"]
+        remaining_steps = state_dict["remaining_steps"]
 
         tool = TavilySearchResults()
         docs = tool.invoke({"query": question})
@@ -523,20 +634,20 @@ class Researcher(object):
         return {
             "messages": [result],
             "sender": "search",
-            "remaining_steps": remaining_steps,
+            "keys":{"remaining_steps": remaining_steps},
         }
     
     def compute(self, state):
 
         print("---Compute---")
         messages = state["messages"]
-        remaining_steps = state["remaining_steps"]
+        remaining_steps = state["keys"]["remaining_steps"]
         result = self.compute_agent.invoke({"messages": messages})
         result = HumanMessage(result['output'], name="compute")
         return {
             "messages": [result],
             "sender": "compute",
-            "remaining_steps": remaining_steps,
+            "keys":{"remaining_steps": remaining_steps},
         }
 
     def hierarchical_solution(self, state):
@@ -618,11 +729,14 @@ class Researcher(object):
             print("----")
 if __name__ == "__main__":
     # tests
-                a=  """You are an R&D planner and your purpose is to come up with a step by step plan that will enable the design engineers to actually design a hardware based on the set of goals, requirements and the context given by the user. \
-                    This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. You are not responsible for simulations and testing. You are only responsible for design. \
-                    Your steps should consist of:
-                    - search when something needs to be searched via the internet or corpus of data. \
-                    - computes when something needs to be computed "via writing a python code". This should include parameters, functions etc that would be coded into the final design. For example generating the values for a lookup table implementation of a non-linear function is a compute step.\
-                    - solution when we have all of the necessary information for enerating the final design. \
-                    The result of the final step should be "solution: writing the final design in the form of an HDL/HLS code." Make sure that each step has all the information needed - do not skip steps."""
-    
+                a=      """You are a hardware engineering literature review agent and your purpose is to come up with a step by step list to:
+                        1. Collect information (search). You essentially come up with an exhaustive list of queries/searches.
+                        2. Write a literature review report based on the collected information (report).
+                        This list should involve individual tasks, that if executed correctly will yield the correct answer.
+                        Do not add any superfluous steps. You are not responsible for the actual design. You are only responsible for literature review.
+                        Your list of questions must be sorted in a top down manner. That is you start with your general questions, followed by more detailled question regarding implementaion methodology etc.
+                        As per above your steps should consist of:\
+                        - search: make sure that it starts with "search:" followed by the information you are searching. This should be simple, single search quaries not a search objective.
+                        - report: we you have collected enough information to write a literature review. Make sure this step starts with "report:"
+                        Your final step should always be report, that is when we have all of the necessary information to write a design document. \
+                        Make sure that your steps consists of meaningful and specific questions, geard towards the goals and requirements of the design - do not skip steps."""
