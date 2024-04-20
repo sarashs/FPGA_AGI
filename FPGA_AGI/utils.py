@@ -2,16 +2,22 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import json
 from typing import Any
+from FPGA_AGI.parameters import LANGS
 
-LANGS = (["systemverilog", "system verilog", "system_verilog", "system-verilog", "sv"] +
-         ["v", "verilog"] +
-         ["hls", "cpp", "c++", "cplusplus", "c plus plus", "c", "hls c", "hls c++", "hls cpp", "vivado hls c++"] +
-         ["vhdl", "vhd", "hdl"] + ["python"])
+def find_extension(language: str):
+    """finds the file extension for the language"""
+    for item in LANGS.keys():
+        if language in LANGS[item]:
+            return item
+    raise ValueError(f"{language} is not a valid language.")
 
 def extract_codes_from_string(string):
     lower_string = string.lower()  # Convert the entire string to lowercase
     code = None
-    for lang in LANGS:
+    langs = []
+    for item in LANGS.keys():
+        langs += LANGS[item]
+    for lang in langs:
         # Create the search pattern for each language in lowercase
         start_pattern = f'```{lang.lower()}\n'
         end_pattern = '\n```'

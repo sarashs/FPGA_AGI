@@ -71,17 +71,17 @@ class Planner(Runnable):
     
 class Review(BaseModel):
     """Literature review structure"""
-    goals: List[str] = Field(description="list of design goals.")
-    requirements: List[str] = Field(description="list of design requirements.")
-    overview: str = Field(description="An overview of common specifications and architectures.")
-    methodology: str = Field(description="complete and comprehensive description of foundational theories, existing solution and case studies, common technical challenges, effective strategies to mitigate any challenges.")
+    #goals: List[str] = Field(description="list of design goals.")
+    #requirements: List[str] = Field(description="list of design requirements.")
+    #overview: str = Field(description="An overview of common specifications and architectures.") *   **Overview: A general overview of the report.
+    methodology: str = Field(description="complete and comprehensive description of foundational theories, algorithms, existing solution and case studies, common technical challenges, effective strategies to mitigate any challenges.")
     implementation: str = Field(description="complete description of the choice of implementation technique including generic and hardware specific optimization techniques. This should be complete enough so that a hardware designer can design a solution based on it.")
 
 class LiteratureReview(Runnable):
     @classmethod
     def from_llm_and_prompt(cls, llm, prompt):
         lit_rev_runnable = create_structured_output_runnable(
-            Plan, llm, prompt
+            Review, llm, prompt
         )
         return lit_rev_runnable
     

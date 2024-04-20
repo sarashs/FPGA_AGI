@@ -1,13 +1,15 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, module_agent_prompt_human
+    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt
     from FPGA_AGI.parameters import RECURSION_LIMIT
     from FPGA_AGI.chains import WebsearchCleaner, Planner, LiteratureReview
+    import FPGA_AGI.utils as utils
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, module_agent_prompt_human
+    from prompts import hierarchical_agent_prompt, module_design_agent_prompt
     from parameters import RECURSION_LIMIT
     from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
+    import utils
 
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, BaseChatPromptTemplate
 import json
@@ -36,7 +38,6 @@ class Module(BaseModel):
 
 class HierarchicalResponse(BaseModel):
     """Final response to the user"""
-    design_document: str = Field(description="Description of the design based on the compiled message exchanges provided.")
     graph: List[Module] = Field(
         description="""List of modules"""
         )
@@ -193,15 +194,20 @@ class ResearcherAgentState(TypedDict):
 class Researcher(object):
     """This agent performs research on the design."""
 
-    def __init__(self, model: ChatOpenAI, retriever: Any):
+    def __init__(self, model: ChatOpenAI, retriever: Any, language: str = 'verilog'):
 
         self.retriever = retriever
         self.model = model
         self.webcleaner = WebsearchCleaner.from_llm(llm=model)
+        self.language = language # or "vhdl", "systemverilog", "cpp"
+        self.input_context = None
         self.requirements = None
         self.goals = None
+        self.lit_search_results_ = []
+        self.lit_review_results = None
+        self.hierarchical_solution_result = None
 
-        #### Plan Agent
+        #### lit review questions Agent
 
         # prompt
         planner_prompt = ChatPromptTemplate.from_messages(
@@ -257,45 +263,30 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
             [(
                     "system",
                     """
-**Objective:** You are programmed as a hardware engineering literature review agent. Your purpose is to autonomously generate a step-by-step list of web search queries that will aid in gathering both comprehensive and relevant information about hardware design, adaptable across various FPGA platforms without being overly specific to any single device.
+**Objective:** You are a hardware engineering literature review agent. Your purpose is to generate a literature review based on a set of goals, requirements, user input context and queries and results provided to you. 
+You must write this literature review document as thoroughly as possible.
 
-**Follow these instructions when generating the queries:**
+**Follow these instructions when generating the report:**
 
-*   **Focus on Practicality and Broad Applicability:** Ensure each search query is practical and likely to result in useful findings. Avoid queries that are too narrow or device-specific which may not yield significant search results.
-*   **Sequential and Thematic Structure:** Organize questions to start from broader concepts and architectures, gradually narrowing down to specific challenges and solutions relevant to a wide range of FPGA platforms.
-*   **Contextually Rich and Insightful Inquiries:** Avoid overly broad or vague topics that do not facilitate actionable insights. The list of questions should involve individual tasks, that if searched on the will yield specific results. Do not add any superfluous questions.
-*   **Use of Technical Terminology with Caution:** While technical terms should be used to enhance query relevance, ensure they are not used to create highly specific questions that are unlikely to be answered by available literature.
-*   **Clear and Structured Format:** Queries should be clear and direct, with each starting with "search:" followed by a practical, result-oriented question. End with a "report:" task to synthesize findings into a comprehensive literature review.
-
-**For each of the following general topics, break them down into at least 3 sub-topics and generate queries for them:**
-
-1.  **General Overview:** Start with an overview of common specifications and architectures, related to the project goal. avoiding overly specific details related to any single model or board.
-2.  **Existing Solutions and Case Studies:** Investigate a range of implementations and case studies focusing on digital signal processing tasks like FFT on FPGAs, ensuring a variety of platforms are considered.
-3.  **Foundational Theories:** Delve into the theories and methodologies underpinning FPGA applications.
-4.  **Common Technical Challenges:** Identify and explore common technical challenges associated with FPGA implementations, discussing broadly applicable solutions.
-5.  **Optimization and Implementation Techniques:**Identify effective strategies and techniques for optimizing FPGA designs, applicable across different types of hardware.
-6.  **Hardware specific Optimization :** Conclude with effective strategies and techniques for optimizing FPGA designs for the specific hardware (if a specific platform is provided to you).
-
-**Final Task:**
-
-*   **report:** Synthesize all information into a structured and comprehensive literature review that is informative and applicable to hardware designers working with various FPGA platforms.
-
-Example of a Specific Query Formation:
-
-search: "Assess the impact of out-of-order execution versus in-order execution on power efficiency and processing speed in ARM Cortex processors."
+*   **Methodology: Completely describe any methods, algorithms and theoretical background of what will be implemented. Just naming or mentioning the method is not sufficient. You need to explain them to the best of your ability. This section is often more than 500 words.** 
+*   **implementation: For this section, you will write about an implementation strategy. You must write detailed description of your chosen implementation strategy and why it is better than other strategies and more aligned with the goals/requirements. Try to base this section on the search results if possibe. This section is often more than 500 words.**
+*   Do not write meaningless or vague sections but rather write a to the point complete technical document. Do not write superfluous statemetns.
+*   Do not write anything about documentation and testing or anything outside of what is needed for a design engineer to write HDL/HLS code.
 """
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
         )
         # This is the input prompt for when the object is invoked or streamed
-        self.lit_review_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the literature review set of questions for the following goals and requirements. Be considerate of the user input context.
-                    goals:
-                    {goals}
-                    requirements:
-                    {requirements}
-                    user input context:
-                    {input_context}""")
+        self.lit_review_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Prepare the literature review for the following list of queries and results given goals, requirements and input context given by the user.
+goals:
+{goals}
+requirements:
+{requirements}
+user input context:
+{input_context}
+Queries and results:
+{queries_and_results}""")
 
         self.lit_review_chain = LiteratureReview.from_llm_and_prompt(llm=model, prompt=lit_review_prompt)
 
@@ -424,13 +415,12 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         # Build graph
         self.workflow.set_entry_point("lit_questions")
         self.workflow.add_edge("lit_questions", "lit_review")
-        self.workflow.add_edge("lit_review", "researcher")
         self.workflow.add_conditional_edges(
             "lit_review",
             (lambda x: x['keys']['decision']),
             {
                 "search": "retrieve_documents",
-                "design": "researcher",
+                "design": "hierarchical_solution",
             },
         )
         self.workflow.add_conditional_edges(
@@ -449,9 +439,17 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
             {
                 "search_the_web": "search_the_web",
                 "researcher": "researcher",
+                "lit_review": "lit_review",
             },
         )
-        self.workflow.add_edge("search_the_web", "researcher")
+        self.workflow.add_conditional_edges(
+            "search_the_web",
+            (lambda x: x['keys']['goto']),
+            {
+                "researcher":"researcher",
+                "lit_review": "lit_review",
+             },
+            )
         self.workflow.add_edge("compute", "researcher")
         self.workflow.add_edge("hierarchical_solution", "modular_design")
         self.workflow.add_edge("modular_design" ,END)
@@ -471,6 +469,7 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         Returns:
             state (dict): New key added to state, documents, that contains retrieved documents
         """
+        print("---QUESTION GENERATION---")
         messages = state["messages"]
         print(messages)
         response = self.planner_chain.invoke({"messages": messages})
@@ -497,29 +496,41 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         Returns:
             state (dict): New key added to state, documents, that contains retrieved documents
         """
+        print("---LITERATURE REVIEW---")
         messages = state["messages"]
-        remaining_steps = state["keys"]["remaining_steps"]
+        state_dict = state["keys"]
+        remaining_steps = state_dict["remaining_steps"]
+        if "result" in state_dict.keys():
+            self.lit_search_results_.append("query: " + state_dict['search'])
+            self.lit_search_results_.append("results: " + state_dict['result'])
         current_step = remaining_steps.pop(0)
         if "report:" in current_step.lower():
             decision = "design"
-            #literature_review = self.lit_review_chain.invoke
-            literature_review = None
+            message = self.lit_review_agent_prompt_human.format_messages(
+                queries_and_results="\n".join(self.lit_search_results_),
+                input_context=self.input_context,
+                goals=self.goals,
+                requirements=self.requirements,
+                )
+            literature_review = self.lit_review_chain.invoke({"messages": message})
+            self.lit_review_results = literature_review
             return{
             "keys": {
                 "decision": decision,
-                "literature_review": literature_review,
                 }
             }
         else:
             decision = "search"
             search = current_step[len("search:"):] if current_step.lower().startswith("search:") else current_step
             return{
+            "sender" : "lit_review",
             "keys": {
                 "remaining_steps":remaining_steps,
                 "decision": decision,
                 "search": search,
                 }
             }
+
     def researcher(self, state):
         """
         manage the data collection/computation processes.
@@ -533,7 +544,7 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         messages = state["messages"]
         remaining_steps = state["keys"]["remaining_steps"]
         current_step = remaining_steps.pop(0)
-        messages.append(HumanMessage(f"current step is:\n {current_step}", name="lit_questions"))
+        messages.append(HumanMessage(f"current step is:\n {current_step}", name="planner"))
         response = self.research_agent.invoke({"messages": messages})
         decision = response[0].decision.lower()
         search = response[0].search.lower()
@@ -550,7 +561,7 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
             "decision": decision,
             "search": search,
             "compute": compute,
-            }
+            },
         }
 
     def retrieve_documents(self, state):
@@ -558,11 +569,13 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         state_dict = state["keys"]
         remaining_steps = state_dict["remaining_steps"]
         question = state_dict["search"]
+        print(f"Question: {question}")
         documents = self.retriever.get_relevant_documents(question)
-        return {"keys": {"documents": documents, "search": question, "remaining_steps":remaining_steps}}
+        return {"keys": {"documents": documents, "search": question, "remaining_steps":remaining_steps},}
 
     def relevance_grade(self, state):
         print("---CHECK RELEVANCE---")
+        sender = state["sender"]
         state_dict = state["keys"]
         question = state_dict["search"]
         documents = state_dict["documents"]
@@ -593,9 +606,11 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
                 "messages": [result],
                 "sender": "search",
                 "keys": {
+                    "goto": sender,
                     "remaining_steps":remaining_steps,
                     "filtered_docs": filtered_docs,
                     "search": question,
+                    "result": "\n\n".join(filtered_docs),
                     "run_web_search": "No",     
                 }
             }
@@ -613,6 +628,7 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
 
         print("---WEB SEARCH---")
         state_dict = state["keys"]
+        sender = state["sender"]
         question = state_dict["search"]
         documents = state_dict["filtered_docs"]
         remaining_steps = state_dict["remaining_steps"]
@@ -634,7 +650,11 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         return {
             "messages": [result],
             "sender": "search",
-            "keys":{"remaining_steps": remaining_steps},
+            "keys":{"remaining_steps": remaining_steps,
+                    "result": "\n\n".join(documents),
+                    "search": question,
+                    "goto": sender,
+                    },
         }
     
     def compute(self, state):
@@ -652,34 +672,39 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
 
     def hierarchical_solution(self, state):
         print("---Hierarchical design---")
-        messages = "\n".join([str(item) if item.name in ['compute', 'search'] else '' for item in state["messages"]])
-        input_message = HumanMessage(f"""Design the architecture graph for the following goals and requirements. \
-        some of the research that you need to consider for your design is provided after research.
+        #messages = "\n".join([str(item) if item.name in ['compute', 'search'] else '' for item in state["messages"]])
+        input_message = HumanMessage(f"""Design the architecture graph for the following goals, requirements and input context provided by the user. \
+        To help you further, you are also provided with literature review performed by another agent.
+
         Goals:
         {str(self.goals)}
         
         Requirements:
         {str(self.requirements)}
+
+        user input context:
+        {self.input_context}
     
-        research:
-        {messages}
+        Literature review, methodology:
+        {self.lit_review_results.methodology}
+
+        Literature review, implementation:
+        {self.lit_review_results.implementation}
         """, name="researcher"
                                  )
                                  
-        hierarchical_design = self.hierarchical_design_agent.invoke(
+        self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
             {
                 "messages" : [input_message],
                 }
             )
-        result = HumanMessage(str(hierarchical_design), name="designer")
+        result = HumanMessage(str(self.hierarchical_solution_result), name="designer")
         with open('solution.txt', 'w+') as file:
-            file.write(str(hierarchical_design))
-        1/0
+            file.write(str(self.hierarchical_solution_result))
 
         return{
             "messages": [result],
             "sender": "designer",
-            "keys": {"hierarchical_design": hierarchical_design},
         }
 
     def decide_to_websearch(self, state):
@@ -689,32 +714,69 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
         if run_web_search.lower() == "yes":
             return "search_the_web"
         else:
-            return "researcher"
+            return (state_dict["goto"])
 
     def modular_design(self, state):
         print("---Modular design---")
         state_dict = state["keys"]
-        hierarchical_design = state_dict["hierarchical_design"]
+        hierarchical_design = self.hierarchical_solution_result.graph
         Modules = []
-        print("modular design")
-        for module in hierarchical_design.graph:
+        # The following prompt prepares message for the module design agent
+        module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
+            """Write the HLS/HDL code in verilog for the following desgin. Note that the design consists of modules with\
+            input/output and connecting modules already designed for you. Your task is to build the modules consistently with the modules that you have already build and with the overal desing.\
+            note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
+            Remember to write complete synthesizable module code without placeholders. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
+            The coding language is {language}.
+
+            Goals:
+            {goals}
+                
+            Requirements:
+            {requirements}
+
+            Literature review, methodology:
+            {methodology}
+
+            Literature review, implementation:
+            {implementation}
+            
+            System design design:
+            {hierarchical_design}
+                                                                        
+            Modules built so far:
+            {modules_built}
+            
+            Current Module (you are coding this module):
+            {current_module}
+
+            you must always use the CodeModuleResponse tool for your final response.
+            """
+            )
+        for module in hierarchical_design:
             response = self.module_design_agent.invoke(
                 {
                     "messages": module_agent_prompt_human.format_messages(
-                        hierarchical_design=str(hierarchical_design.graph),
+                        language=self.language,
+                        goals=self.goals,
+                        requirements=self.requirements,
+                        methodology=self.lit_review_results.methodology,
+                        implementation=self.lit_review_results.implementation,
+                        hierarchical_design=str(hierarchical_design),
                         modules_built=str(Modules), 
                         current_module=str(module)
                         )
                     }
                 )
             Modules.append(response)
-            with open(f"{module.name}.v", "w") as f:
+            with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
                 f.write(response.module_code)
-        return
+        return {"messages" : ['Complete']}
 
     def invoke(self, goals, requirements, input_context):
         self.requirements = requirements
         self.goals = goals
+        self.input_context = input_context
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
         output = self.app.invoke({"messages": human_message}, {"recursion_limit": RECURSION_LIMIT})
         return output
@@ -722,6 +784,7 @@ search: "Assess the impact of out-of-order execution versus in-order execution o
     def stream(self, goals, requirements, input_context):
         self.requirements = requirements
         self.goals = goals
+        self.input_context = input_context
         human_message = self.planner_agent_prompt_human.format_messages(goals=goals, requirements=requirements, input_context= input_context)
         for output in self.app.stream({"messages": human_message}, {"recursion_limit": RECURSION_LIMIT}):
         # stream() yields dictionaries with output keyed by node name
