@@ -7,7 +7,7 @@ from FPGA_AGI.parameters import LANGS
 def find_extension(language: str):
     """finds the file extension for the language"""
     for item in LANGS.keys():
-        if language in LANGS[item]:
+        if language.lower() in LANGS[item]:
             return item
     raise ValueError(f"{language} is not a valid language.")
 
@@ -47,7 +47,7 @@ def plot_graph(hierarchicalmodules: Any, save_path: Any = None):
 
     # Add nodes with the module name as the node ID
     for module in hierarchicalmodules.graph:
-        G.add_node(module.name, description=module.description)
+        G.add_node(module.name, description="none")
 
     # Add edges based on the 'connections' in each module
     for module in hierarchicalmodules.graph:

@@ -1,11 +1,11 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt
+    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator
     from FPGA_AGI.parameters import RECURSION_LIMIT
     from FPGA_AGI.chains import WebsearchCleaner, Planner, LiteratureReview
     import FPGA_AGI.utils as utils
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt, module_design_agent_prompt
+    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator
     from parameters import RECURSION_LIMIT
     from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
@@ -33,12 +33,27 @@ class Module(BaseModel):
     """module definition"""
     name: str = Field(description="Name of the module.")
     description: str = Field(description="Module description including detailed explanation of what the module does and how to achieve it. Think of it as a code equivalent of the module without coding it.")
-    connections: List[str] = Field(description="List of the modules connecting to this module.")
+    connections: List[str] = Field(description="List of the modules connecting to this module (be it via input or output).")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
+    module_template: str = Field(description="Outline of the HDL/HLS code with placeholders and enough comments to be completed by the. The placeholders must be comments starting with PLACEHOLDER:")
 
 class HierarchicalResponse(BaseModel):
     """Final response to the user"""
     graph: List[Module] = Field(
+        description="""List of modules"""
+        )
+    
+class UpgradedModule(BaseModel):
+    """module definition"""
+    name: str = Field(description="Name of the module.")
+    improvements: str = Field(description="Explaination of what aspect of the design was modified or improved. If no improvement return NOIMPROVEMENTS")
+    connections: List[str] = Field(description="List of the modules connecting to this module (be it via input or output).")
+    ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
+    module_code: str = Field(description="Full synthesizable HDL/HLS code with no placeholders or ambiguities.")
+
+class UpgradedHierarchicalResponse(BaseModel):
+    """Final response to the user"""
+    graph: List[UpgradedModule] = Field(
         description="""List of modules"""
         )
 
@@ -65,7 +80,7 @@ class GenericToolCallingAgent(object):
     """This agent is a generic tool calling agent. The list of tools, prompt template and resopnse format decides what the agent actually does."""
     def __init__(self, model: ChatOpenAI,
                  prompt: BaseChatPromptTemplate=hierarchical_agent_prompt,
-                 tools: List=[search_web], response_format: BaseModel=HierarchicalResponse):
+                 tools: List=[], response_format: BaseModel=HierarchicalResponse):
         tools.append(Thought)
         self.tool_executor = ToolExecutor(tools)
         self.response_format = response_format
@@ -209,7 +224,7 @@ class Researcher(object):
 
         #### lit review questions Agent
 
-        # prompt
+        # prompt **For each of the following general topics, break them down into at least 3 sub-topics and generate queries for them:**
         planner_prompt = ChatPromptTemplate.from_messages(
             [(
                     "system",
@@ -224,7 +239,7 @@ class Researcher(object):
 *   **Use of Technical Terminology with Caution:** While technical terms should be used to enhance query relevance, ensure they are not used to create highly specific questions that are unlikely to be answered by available literature.
 *   **Clear and Structured Format:** Queries should be clear and direct, with each starting with "search:" followed by a practical, result-oriented question. End with a "report:" task to synthesize findings into a comprehensive literature review.
 
-**For each of the following general topics, break them down into at least 3 sub-topics and generate queries for them:**
+**Only perform one query for each topic:**
 
 1.  **General Overview:** Start with an overview of common specifications and architectures, related to the project goal. avoiding overly specific details related to any single model or board.
 2.  **Existing Solutions and Case Studies:** Investigate a range of implementations and case studies focusing on digital signal processing tasks like FFT on FPGAs, ensuring a variety of platforms are considered.
@@ -239,7 +254,7 @@ class Researcher(object):
 
 Example of a Specific Query Formation:
 
-search: "Assess the impact of out-of-order execution versus in-order execution on power efficiency and processing speed in ARM Cortex processors."
+search: "pipelining of risc-v devices."
 """
                 ),
                 MessagesPlaceholder(variable_name="messages"),
@@ -391,7 +406,15 @@ Queries and results:
         
 
     #### Hierarchical Design Agent
-        self.hierarchical_design_agent = GenericToolCallingAgent(model=model)
+        self.hierarchical_design_agent = GenericToolCallingAgent(model=model, tools=[search_web, python_run])
+
+    #### Hierarchical Design Evaluator Agent
+        self.hierarchical_design_evaluator_agent = GenericToolCallingAgent(
+            response_format=UpgradedHierarchicalResponse,
+            prompt=hierarchical_agent_evaluator,
+            model=model,
+            tools=[python_run]
+            )
 
     #### Module Design Agent
         self.module_design_agent = GenericToolCallingAgent(
@@ -409,6 +432,7 @@ Queries and results:
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
         self.workflow.add_node("hierarchical_solution", self.hierarchical_solution)
+        #self.workflow.add_node("hierarchical_evaluation", self.hierarchical_evaluation)
         self.workflow.add_node("modular_design", self.modular_design) 
         self.workflow.add_node("search_the_web", self.search_the_web)
 
@@ -452,6 +476,7 @@ Queries and results:
             )
         self.workflow.add_edge("compute", "researcher")
         self.workflow.add_edge("hierarchical_solution", "modular_design")
+        #self.workflow.add_edge("hierarchical_evaluation", "modular_design")
         self.workflow.add_edge("modular_design" ,END)
 
         # Compile
@@ -674,6 +699,7 @@ Queries and results:
         print("---Hierarchical design---")
         #messages = "\n".join([str(item) if item.name in ['compute', 'search'] else '' for item in state["messages"]])
         input_message = HumanMessage(f"""Design the architecture graph for the following goals, requirements and input context provided by the user. \
+        The language of choice for coding the design is {self.language}.
         To help you further, you are also provided with literature review performed by another agent.
 
         Goals:
@@ -692,12 +718,20 @@ Queries and results:
         {self.lit_review_results.implementation}
         """, name="researcher"
                                  )
-                                 
-        self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
-            {
-                "messages" : [input_message],
-                }
-            )
+        try:                         
+            self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
+                {
+                    "messages" : [input_message],
+                    }
+                )
+        except:
+            print("This step failed, trying again.")
+            self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
+                {
+                    "messages" : [input_message],
+                    }
+                )
+        self.hierarchical_solution_result.graph.sorted(key=lambda x: len(x.connections)) # sort by number of outward connections
         result = HumanMessage(str(self.hierarchical_solution_result), name="designer")
         with open('solution.txt', 'w+') as file:
             file.write(str(self.hierarchical_solution_result))
@@ -705,6 +739,58 @@ Queries and results:
         return{
             "messages": [result],
             "sender": "designer",
+        }
+    
+    def hierarchical_evaluation(self, state):
+        print("---Hierarchical Design Evaluation---")
+        hierarchical_design = self.hierarchical_solution_result.graph
+        input_message = HumanMessagePromptTemplate.from_template(
+            """
+            - You are writing this code in {language}.
+            - You must make sure that your code achieves the goals while satisfying as many of the requirements as possible.
+            - You should take advantage of the literature review components.
+            - If you need to compute anything before coding a specific module, you are provided with a python_run tool to do that.
+
+            You are provided with the overal design goals and requirements, a literature review, the overal system design which you will evaluate/improve.\
+            Goals:
+            {goals}
+                
+            Requirements:
+            {requirements}
+
+            Literature review, methodology:
+            {methodology}
+
+            Literature review, implementation:
+            {implementation}
+            
+            System design:
+            {hierarchical_design}
+            """
+            )
+                                 
+        self.hierarchical_solution_result = self.hierarchical_design_evaluator_agent.invoke(
+            {
+                "messages" : input_message.format_messages(
+                        language=self.language,
+                        goals=self.goals,
+                        requirements=self.requirements,
+                        methodology=self.lit_review_results.methodology,
+                        implementation=self.lit_review_results.implementation,
+                        hierarchical_design=str(hierarchical_design),
+                        ),
+                }
+            )
+        result = HumanMessage(str(self.hierarchical_solution_result), name="evaluator")
+        with open('solution_upgraded.txt', 'w+') as file:
+            file.write(str(self.hierarchical_solution_result))
+        for module in self.hierarchical_solution_result.graph:
+            with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
+                f.write(module.module_code)
+
+        return{
+            "messages": [result],
+            "sender": "evaluator",
         }
 
     def decide_to_websearch(self, state):
@@ -741,7 +827,7 @@ Queries and results:
             Literature review, implementation:
             {implementation}
             
-            System design design:
+            System design:
             {hierarchical_design}
                                                                         
             Modules built so far:
@@ -792,14 +878,4 @@ Queries and results:
             print("----")
 if __name__ == "__main__":
     # tests
-                a=      """You are a hardware engineering literature review agent and your purpose is to come up with a step by step list to:
-                        1. Collect information (search). You essentially come up with an exhaustive list of queries/searches.
-                        2. Write a literature review report based on the collected information (report).
-                        This list should involve individual tasks, that if executed correctly will yield the correct answer.
-                        Do not add any superfluous steps. You are not responsible for the actual design. You are only responsible for literature review.
-                        Your list of questions must be sorted in a top down manner. That is you start with your general questions, followed by more detailled question regarding implementaion methodology etc.
-                        As per above your steps should consist of:\
-                        - search: make sure that it starts with "search:" followed by the information you are searching. This should be simple, single search quaries not a search objective.
-                        - report: we you have collected enough information to write a literature review. Make sure this step starts with "report:"
-                        Your final step should always be report, that is when we have all of the necessary information to write a design document. \
-                        Make sure that your steps consists of meaningful and specific questions, geard towards the goals and requirements of the design - do not skip steps."""
+    pass
