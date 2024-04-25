@@ -10,7 +10,6 @@ except ModuleNotFoundError:
     from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
     import utils
-
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, BaseChatPromptTemplate
 import json
 from langgraph.prebuilt import ToolExecutor
@@ -26,36 +25,30 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, Fu
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 
-from langchain_community.tools.tavily_search import TavilySearchResults
-from pprint import pprint
-
 class Module(BaseModel):
     """module definition"""
     name: str = Field(description="Name of the module.")
     description: str = Field(description="Module description including detailed explanation of what the module does and how to achieve it. Think of it as a code equivalent of the module without coding it.")
     connections: List[str] = Field(description="List of the modules connecting to this module (be it via input or output).")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    module_template: str = Field(description="Outline of the HDL/HLS code with placeholders and enough comments to be completed by the. The placeholders must be comments starting with PLACEHOLDER:")
+    module_template: str = Field(description="Outline of the HDL/HLS code with placeholders and enough comments to be completed by a coder. The outline must include module names and ports. The placeholders must be comments starting with PLACEHOLDER:")
 
 class HierarchicalResponse(BaseModel):
     """Final response to the user"""
     graph: List[Module] = Field(
         description="""List of modules"""
         )
-    
-class UpgradedModule(BaseModel):
-    """module definition"""
-    name: str = Field(description="Name of the module.")
-    improvements: str = Field(description="Explaination of what aspect of the design was modified or improved. If no improvement return NOIMPROVEMENTS")
-    connections: List[str] = Field(description="List of the modules connecting to this module (be it via input or output).")
-    ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    module_code: str = Field(description="Full synthesizable HDL/HLS code with no placeholders or ambiguities.")
 
-class UpgradedHierarchicalResponse(BaseModel):
-    """Final response to the user"""
-    graph: List[UpgradedModule] = Field(
-        description="""List of modules"""
-        )
+class SystemEvaluator(BaseModel):
+    """module definition"""
+    coding_language: bool = Field(description="Whether the coding language is incorrect.")
+    connections: bool = Field(description="Whether the connections between modules are inconsistent or the input/outputs are connected improperly.")
+    ports: bool = Field(description="Whether the ports and interfaces are defined incorrectly or there are any missing ports")
+    excessive: bool = Field(description="Whether the design has any excessive and/or superflous modules.")
+    missing: bool = Field(description="Whether the design is missing any modules.")
+    template: bool = Field(description="Whether the template code correctly identifies all of the place holders and correctly includes the module ports.")
+    overal: bool = Field(description="Whether the current system is not going to be able to satisfy all of the design goals and most of its requirements.")
+    description: str = Field(description="If any of the above is true, describe which module it is and how it should be corrected, otherwise NA.")
 
 ### Module Design agent
 class CodeModuleResponse(BaseModel):
@@ -410,10 +403,10 @@ Queries and results:
 
     #### Hierarchical Design Evaluator Agent
         self.hierarchical_design_evaluator_agent = GenericToolCallingAgent(
-            response_format=UpgradedHierarchicalResponse,
+            response_format=SystemEvaluator,
             prompt=hierarchical_agent_evaluator,
             model=model,
-            tools=[python_run]
+            tools=[]
             )
 
     #### Module Design Agent
@@ -432,8 +425,8 @@ Queries and results:
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
         self.workflow.add_node("hierarchical_solution", self.hierarchical_solution)
-        #self.workflow.add_node("hierarchical_evaluation", self.hierarchical_evaluation)
-        self.workflow.add_node("modular_design", self.modular_design) 
+        self.workflow.add_node("hierarchical_evaluation", self.hierarchical_evaluation)
+        #self.workflow.add_node("modular_design", self.modular_design) 
         self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
@@ -475,9 +468,9 @@ Queries and results:
              },
             )
         self.workflow.add_edge("compute", "researcher")
-        self.workflow.add_edge("hierarchical_solution", "modular_design")
+        self.workflow.add_edge("hierarchical_solution", "hierarchical_evaluation")
         #self.workflow.add_edge("hierarchical_evaluation", "modular_design")
-        self.workflow.add_edge("modular_design" ,END)
+        self.workflow.add_edge("hierarchical_evaluation" ,END)
 
         # Compile
         self.app = self.workflow.compile()
@@ -658,15 +651,19 @@ Queries and results:
         documents = state_dict["filtered_docs"]
         remaining_steps = state_dict["remaining_steps"]
 
-        tool = TavilySearchResults()
-        docs = tool.invoke({"query": question})
+        # if using tavily search
+        docs = search_web.invoke({"query": question})
+        # if using serpapi
+        #docs = search_web(question)
         web_results = []
         for d in docs:
             try:
                 cleaned_content = self.webcleaner.invoke(d["content"])
                 web_results.append(cleaned_content.cleaned)
+                print("Websearch output added.")
             except:
-                print("Warning: This item in websearch did not yield any content.")
+                web_results.append(d["content"])
+                print("Warning: web cleaner didn't work.")
         web_results = "\n".join(web_results)
         #web_results = Document(page_content=web_results)
         documents.append(web_results)
@@ -731,7 +728,7 @@ Queries and results:
                     "messages" : [input_message],
                     }
                 )
-        self.hierarchical_solution_result.graph.sorted(key=lambda x: len(x.connections)) # sort by number of outward connections
+        self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
         result = HumanMessage(str(self.hierarchical_solution_result), name="designer")
         with open('solution.txt', 'w+') as file:
             file.write(str(self.hierarchical_solution_result))
@@ -743,15 +740,17 @@ Queries and results:
     
     def hierarchical_evaluation(self, state):
         print("---Hierarchical Design Evaluation---")
+        self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
         hierarchical_design = self.hierarchical_solution_result.graph
         input_message = HumanMessagePromptTemplate.from_template(
             """
-            - You are writing this code in {language}.
-            - You must make sure that your code achieves the goals while satisfying as many of the requirements as possible.
-            - You should take advantage of the literature review components.
-            - If you need to compute anything before coding a specific module, you are provided with a python_run tool to do that.
+            
+            You are provided with the overal design goals and requirements, a literature review, the overal system design and the desired coding language in the following.
+            Your job is to assess the system design based on the given information. Be meticulous.
+            
+            Coding language:
+            {language}
 
-            You are provided with the overal design goals and requirements, a literature review, the overal system design which you will evaluate/improve.\
             Goals:
             {goals}
                 
@@ -769,7 +768,7 @@ Queries and results:
             """
             )
                                  
-        self.hierarchical_solution_result = self.hierarchical_design_evaluator_agent.invoke(
+        self.hierarchical_evaluation_result = self.hierarchical_design_evaluator_agent.invoke(
             {
                 "messages" : input_message.format_messages(
                         language=self.language,
@@ -781,12 +780,9 @@ Queries and results:
                         ),
                 }
             )
-        result = HumanMessage(str(self.hierarchical_solution_result), name="evaluator")
-        with open('solution_upgraded.txt', 'w+') as file:
-            file.write(str(self.hierarchical_solution_result))
-        for module in self.hierarchical_solution_result.graph:
-            with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
-                f.write(module.module_code)
+        result = HumanMessage(str(self.hierarchical_evaluation_result), name="evaluator")
+        with open('solution_problems.txt', 'w+') as file:
+            file.write(str(self.hierarchical_evaluation_result))
 
         return{
             "messages": [result],
@@ -809,7 +805,7 @@ Queries and results:
         Modules = []
         # The following prompt prepares message for the module design agent
         module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
-            """Write the HLS/HDL code in verilog for the following desgin. Note that the design consists of modules with\
+            """Write the HLS/HDL code for the following desgin. Note that the design consists of modules with\
             input/output and connecting modules already designed for you. Your task is to build the modules consistently with the modules that you have already build and with the overal desing.\
             note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
             Remember to write complete synthesizable module code without placeholders. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\

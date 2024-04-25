@@ -1,20 +1,60 @@
 import io
+import requests
+from bs4 import BeautifulSoup
 from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import SerpAPIWrapper
 from contextlib import redirect_stdout
 from typing import Annotated
 from FPGA_AGI.utils import extract_codes_from_string
+from serpapi import GoogleSearch
+import os
+from FPGA_AGI.parameters import MAX_WEBSEARCH_RESULTS, SERPAPI_PARAMS
+
+
 
 ### SerpAPI websearch tool
 
-search = SerpAPIWrapper()
+#search = SerpAPIWrapper()
 
 @tool
-def search_web(keywords: str):
+def search_web(keywords: Annotated[str, "The keywords you want to search on the web"]) -> list:
     """A web search tool."""
-    ret = search.run(keywords)
-    return ret
+    SERPAPI_PARAMS["q"] = keywords
+    search = GoogleSearch(SERPAPI_PARAMS)
+    ret = search.get_dict()
+    docs = []
+    if not "organic_results" in ret.keys():
+        print(SERPAPI_PARAMS)
+        print(ret['error'])
+        return docs
+    for item in ret["organic_results"]:
+        doc = {'content': None}
+        # Fetch the webpage content
+        if 'link' in item.keys():
+            url = item["link"]
+            try:
+                response = requests.get(url)
+            except:
+                pass
+
+            # Ensure the request was successful
+            if response.status_code == 200:
+                
+                try:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    page_text = ' '.join(soup.stripped_strings)
+                    doc['content'] = page_text
+                    docs.append(doc)
+                except:
+                    pass
+            else:
+                print(f"Failed to fetch the URL: {response.status_code}")
+        if len(docs) == MAX_WEBSEARCH_RESULTS:
+            return docs
+    return docs
+
+search_web = TavilySearchResults()
 
 ### Python run tool
 
