@@ -1,11 +1,11 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator
+    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt
     from FPGA_AGI.parameters import RECURSION_LIMIT
     from FPGA_AGI.chains import WebsearchCleaner, Planner, LiteratureReview
     import FPGA_AGI.utils as utils
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator
+    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt
     from parameters import RECURSION_LIMIT
     from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
@@ -399,12 +399,19 @@ Queries and results:
         
 
     #### Hierarchical Design Agent
-        self.hierarchical_design_agent = GenericToolCallingAgent(model=model, tools=[search_web, python_run])
+        self.hierarchical_design_agent = GenericToolCallingAgent(model=model, tools=[search_web])
 
     #### Hierarchical Design Evaluator Agent
         self.hierarchical_design_evaluator_agent = GenericToolCallingAgent(
             response_format=SystemEvaluator,
             prompt=hierarchical_agent_evaluator,
+            model=model,
+            tools=[]
+            )
+
+    #### Hierarchical Redesign Agent
+        self.hierarchical_redesign_agent = GenericToolCallingAgent(
+            prompt=hierarchical_agent_update_prompt,
             model=model,
             tools=[]
             )
@@ -425,8 +432,9 @@ Queries and results:
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("relevance_grade", self.relevance_grade)
         self.workflow.add_node("hierarchical_solution", self.hierarchical_solution)
+        self.workflow.add_node("redesign_solution", self.redesign_solution)
         self.workflow.add_node("hierarchical_evaluation", self.hierarchical_evaluation)
-        #self.workflow.add_node("modular_design", self.modular_design) 
+        self.workflow.add_node("modular_design", self.modular_design) 
         self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
@@ -469,8 +477,16 @@ Queries and results:
             )
         self.workflow.add_edge("compute", "researcher")
         self.workflow.add_edge("hierarchical_solution", "hierarchical_evaluation")
-        #self.workflow.add_edge("hierarchical_evaluation", "modular_design")
-        self.workflow.add_edge("hierarchical_evaluation" ,END)
+        self.workflow.add_conditional_edges(
+            "hierarchical_evaluation",
+            (lambda x: x['keys']['goto']),
+            {
+                "redesign":"redesign_solution",
+                "modular": "modular_design",
+            },
+        )
+        self.workflow.add_edge("redesign_solution", "hierarchical_evaluation")
+        self.workflow.add_edge("modular_design" ,END)
 
         # Compile
         self.app = self.workflow.compile()
@@ -781,12 +797,73 @@ Queries and results:
                 }
             )
         result = HumanMessage(str(self.hierarchical_evaluation_result), name="evaluator")
-        with open('solution_problems.txt', 'w+') as file:
-            file.write(str(self.hierarchical_evaluation_result))
+        #with open('solution_problems.txt', 'w+') as file:
+        #    file.write(str(self.hierarchical_evaluation_result))
 
         return{
             "messages": [result],
             "sender": "evaluator",
+            "keys": {
+                "goto": "modular" if self.hierarchical_evaluation_result.description.lower() == "na" else "redesign",
+                "eval_results": self.hierarchical_evaluation_result,
+                },
+        }
+    
+    def redesign_solution(self, state):
+
+        print("---Redesign---")
+
+        state_dict = state["keys"]
+        eval_results = state_dict["eval_results"]
+        input_message = HumanMessage(f"""Improve the architecture graph for the following goals, requirements and input context provided. \
+        You are also provided with the previous design and the evaluator feedback.
+        The language of choice for coding the design is {self.language}.
+        To help you further, you are also provided with literature review performed by another agent.
+
+        Goals:
+        {str(self.goals)}
+        
+        Requirements:
+        {str(self.requirements)}
+
+        user input context:
+        {self.input_context}
+    
+        Literature review, methodology:
+        {self.lit_review_results.methodology}
+
+        Literature review, implementation:
+        {self.lit_review_results.implementation}
+
+        System design architecture:
+        {str(self.hierarchical_solution_result)}
+
+        Evaluator feedback:
+        {str(eval_results)}
+
+        """, name="evaluator"
+                                 )
+        try:                         
+            self.hierarchical_solution_result = self.hierarchical_redesign_agent.invoke(
+                {
+                    "messages" : [input_message],
+                    }
+                )
+        except:
+            print("This step failed, trying again.")
+            self.hierarchical_solution_result = self.hierarchical_redesign_agent.invoke(
+                {
+                    "messages" : [input_message],
+                    }
+                )
+        self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
+        result = HumanMessage(str(self.hierarchical_solution_result), name="redesigner")
+        with open('redesigned_solution.txt', 'w+') as file:
+            file.write(str(self.hierarchical_solution_result))
+
+        return{
+            "messages": [result],
+            "sender": "redesigner",
         }
 
     def decide_to_websearch(self, state):

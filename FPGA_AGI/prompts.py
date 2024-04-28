@@ -52,6 +52,7 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
             - If the coding language is HLS C++, you should not include clock signals.
             - Ensure to follow the coding language given to you.
             - If module A's output is connected to module B's input, then module A is connected to B.
+            - If any extra information is needed, you are provided with a web search tool which you can use to improve your knowledge.
 
             Use the following format:
 
@@ -76,6 +77,8 @@ hierarchical_agent_evaluator = ChatPromptTemplate.from_messages(
             - The template code correctly identifies all of the place holders and correctly includes the module ports.
             - Overal it is clear how the current system is going to be able to satisfy all of the design goals and most of its requirements.
             - The coding language is very important and the modules and templates must be defined based on the coding language.
+            - If the coding language is HLS C++, you should not include clock signals.
+            - If the coding language is HLS C++, you must adhere to xilinx HLS C++ guidelines.
             
             If the design fails in any of the above then it should be described what the issue is and how it can be corrected.
 
@@ -89,7 +92,7 @@ hierarchical_agent_evaluator = ChatPromptTemplate.from_messages(
 )
 
 hierarchical_agent_update_prompt = ChatPromptTemplate.from_messages(
-    [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project. Your design will be used by a HDL/HLS coder to write the modules.
+    [SystemMessage(content="""You are an FPGA design engineer whose purpose is to improve the system design of a FPGA project, given some feed back. Your design will be used by a HDL/HLS C++ coder to write the modules.
             Your responsibilities are:
             - Define a top-level module named "Top_module" that contains the rest of the modules.
             - Ensure each module has a unique name, a detailed description, defined ports, and clear connections to other modules.
@@ -100,8 +103,10 @@ hierarchical_agent_update_prompt = ChatPromptTemplate.from_messages(
             - If additional information is needed, you can independently perform web searches.
             - If the coding language is one of the verilog, vhdl, system verilog, you must include clock and reset inputs to your modules wherever necessary.
             - If the coding language is HLS C++, you should not include clock signals.
+            - If the coding language is HLS C++, you must adhere to xilinx HLS C++ guidelines.
             - Ensure to follow the coding language given to you.
             - If module A's output is connected to module B's input, then module A is connected to B.
+            - If any extra information is needed, you are provided with a web search tool which you can use to improve your knowledge.
 
             Use the following format:
 
@@ -119,6 +124,7 @@ module_design_agent_prompt = ChatPromptTemplate.from_messages(
             Your responsibilities include:
             - Replacing all placeholders with complete synthesizable code.
             - Writing production-ready code, considering efficiency metrics and performance goals.
+            - Do not leave any unwritten part of the code (placeholders or to be designed later) unless absolutely necessary.
             - Using necessary libraries and headers for FPGA design.
             - Managing data flow and control signals to ensure proper functionality.
             - Implementing specific logic, if necessary, for communication protocols or hardware interactions.
@@ -128,6 +134,9 @@ module_design_agent_prompt = ChatPromptTemplate.from_messages(
             - Implement internal logic and control mechanisms.
             - Ensure proper interactions with other modules within the system.
             - Your modules should include complete code and have no placeholders or any need for futher coding beyond what you write.
+            - If the coding language is HLS C++, you must include pragmas to achieve the necessary memory and performance metrics.
+            - If the coding language is HLS C++, you should not include clock signals.
+            - If the coding language is HLS C++, you must adhere to xilinx HLS C++ guidelines.
             Use the following format:
 
             Thought: You should think of an action. You do this by calling the Thought tool/function. This is the only way to think.
