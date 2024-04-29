@@ -58,7 +58,7 @@ class CodeModuleResponse(BaseModel):
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
     module_code: str = Field(description="Complete working synthesizable HDL/HLS code without any placeholders.")
-    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the same HDL/HLS language.")
+    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the same HDL/HLS language. the testbench module name should be module name underline tb")
 
 class FinalDesignGraph(BaseModel):
     """Final Design Graph"""
@@ -435,6 +435,7 @@ Queries and results:
         self.workflow.add_node("redesign_solution", self.redesign_solution)
         self.workflow.add_node("hierarchical_evaluation", self.hierarchical_evaluation)
         self.workflow.add_node("modular_design", self.modular_design) 
+        self.workflow.add_node("modular_integrator", self.modular_integrator) 
         self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
@@ -486,7 +487,8 @@ Queries and results:
             },
         )
         self.workflow.add_edge("redesign_solution", "hierarchical_evaluation")
-        self.workflow.add_edge("modular_design" ,END)
+        self.workflow.add_edge("modular_design", "modular_integrator")
+        self.workflow.add_edge("modular_integrator" ,END)
 
         # Compile
         self.app = self.workflow.compile()
@@ -882,8 +884,8 @@ Queries and results:
         Modules = []
         # The following prompt prepares message for the module design agent
         module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
-            """Write the HLS/HDL code for the following desgin. Note that the design consists of modules with\
-            input/output and connecting modules already designed for you. Your task is to build the modules consistently with the modules that you have already build and with the overal desing.\
+            """Write the HLS/HDL code for the following desgin. Note that the design consisting of modules with\
+            input/output and connecting modules already designed for you. Your task is to build the modules in consistent with the modules that you have already built and with the overal desing.\
             note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
             Remember to write complete synthesizable module code without placeholders. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
             The coding language is {language}.
@@ -930,7 +932,68 @@ Queries and results:
             Modules.append(response)
             with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
                 f.write(response.module_code)
-        return {"messages" : ['Complete']}
+        return {"messages" : ['module design stage completed'],
+                'keys' : {'coded_modules': Modules,
+                          },
+                }
+    
+    def modular_integrator(self, state):
+        print("---Modular Integration---")
+        state_dict = state["keys"]
+        hierarchical_design = state_dict['coded_modules']
+        Modules = []
+        # The following prompt prepares message for the module design agent
+        module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
+            """Improve the HLS/HDL code for the following desgin. Note that the design is to some degree codeded for you. Your task is to write the remaining codes of the modules in consistent the modules that you have already built and the overal desing.\
+            note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
+            you should also use various technique to optimize your final code for speed, memory, device compatibility. These techniques include proper usage of device resources as well as code pragmas (if you are coding in HLS C++).
+            Remember to write "complete synthesizable module code" voide of any placeholders or any simplified logic. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
+            The coding language is {language}.
+
+            Goals:
+            {goals}
+                
+            Requirements:
+            {requirements}
+
+            Literature review, methodology:
+            {methodology}
+
+            Literature review, implementation:
+            {implementation}
+            
+            System design:
+            {hierarchical_design}
+                                                                        
+            Modules built so far:
+            {modules_built}
+            
+            Current Module (you are coding this module):
+            {current_module}
+
+            you must always use the CodeModuleResponse tool for your final response.
+            """
+            )
+        for module in hierarchical_design:
+            response = self.module_design_agent.invoke(
+                {
+                    "messages": module_agent_prompt_human.format_messages(
+                        language=self.language,
+                        goals=self.goals,
+                        requirements=self.requirements,
+                        methodology=self.lit_review_results.methodology,
+                        implementation=self.lit_review_results.implementation,
+                        hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
+                        modules_built=str(Modules), 
+                        current_module=str(module)
+                        )
+                    }
+                )
+            Modules.append(response)
+            with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
+                f.write(response.module_code)
+            with open(f"{module.name}_tb.{utils.find_extension(self.language)}", "w") as f:
+                f.write(response.test_bench_code)
 
     def invoke(self, goals, requirements, input_context):
         self.requirements = requirements
