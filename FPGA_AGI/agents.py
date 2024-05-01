@@ -1018,7 +1018,7 @@ you must always use the ModuleEvaluator tool for your final response.
                     language=self.language,
                     goals=self.goals,
                     requirements=self.requirements,
-                    coded_modules='\n\n'.join([module.name + "\n" + module.code for module in hierarchical_design])
+                    coded_modules='\n\n'.join([module.name + "\n" + module.module_code for module in hierarchical_design])
                     )
                 }
             )
