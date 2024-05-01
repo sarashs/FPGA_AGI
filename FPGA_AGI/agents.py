@@ -1,11 +1,11 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt
+    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt, module_evaluate_agent_prompt
     from FPGA_AGI.parameters import RECURSION_LIMIT
     from FPGA_AGI.chains import WebsearchCleaner, Planner, LiteratureReview
     import FPGA_AGI.utils as utils
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt
+    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt, module_evaluate_agent_prompt
     from parameters import RECURSION_LIMIT
     from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
@@ -24,6 +24,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, Fu
 #from langchain.prompts import PromptTemplate, MessagesPlaceholder, ChatPromptTemplate, BaseChatPromptTemplate
 from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.agents import AgentExecutor, create_openai_tools_agent
+import os
 
 class Module(BaseModel):
     """module definition"""
@@ -39,8 +40,9 @@ class HierarchicalResponse(BaseModel):
         description="""List of modules"""
         )
 
+### System level evaluator
 class SystemEvaluator(BaseModel):
-    """module definition"""
+    """system design evaluation"""
     coding_language: bool = Field(description="Whether the coding language is incorrect.")
     connections: bool = Field(description="Whether the connections between modules are inconsistent or the input/outputs are connected improperly.")
     ports: bool = Field(description="Whether the ports and interfaces are defined incorrectly or there are any missing ports")
@@ -49,6 +51,15 @@ class SystemEvaluator(BaseModel):
     template: bool = Field(description="Whether the template code correctly identifies all of the place holders and correctly includes the module ports.")
     overal: bool = Field(description="Whether the current system is not going to be able to satisfy all of the design goals and most of its requirements.")
     description: str = Field(description="If any of the above is true, describe which module it is and how it should be corrected, otherwise NA.")
+
+### Module level evaluator
+class ModuleEvaluator(BaseModel):
+    """module evaluation"""
+    coding_language: bool = Field(description="Whether the coding language is incorrect.")
+    adherence: bool = Field(description="Whether the code adheres to HDL/HLS language components. In particular, if the language is HLS C++, the code must be in HLS C++ and not just regular C++.")
+    placeholders: bool = Field(description="Whether the code has any placeholders or otherwise missing components from a complete synthesizable code in this module.")
+    optimizations: bool = Field(description="Whether the code is optimized in line with the goals and requirements. For HLS this is achieved via pragmas")
+    feedback: str = Field(description="If any of the above is true, describe what is needed to be done, otherwise NA.")
 
 ### Module Design agent
 class CodeModuleResponse(BaseModel):
@@ -118,7 +129,7 @@ class GenericToolCallingAgent(object):
         if "function_call" not in last_message.additional_kwargs:
             print("---Error---")
             print(last_message)
-            raise ValueError("The message must be a function call")
+            print("The message must be a function call")
             return "end"
         # Otherwise if there is, we need to check what type of function call it is
         elif last_message.additional_kwargs["function_call"]["name"] == self.response_format.__name__:
@@ -161,6 +172,7 @@ class GenericToolCallingAgent(object):
     def invoke(self, messages):
 
         output = self.app.invoke(messages, {"recursion_limit": RECURSION_LIMIT})
+        print(output)
         out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
         out = self.response_format.parse_obj(out)
         return out
@@ -186,7 +198,7 @@ class ResearcherResponse(BaseModel):
     code_output: str = Field(description="""Any code execution results that may be useful for the design""")
     solution_approach: str = Field(description="""Description of the solution approach""")
 
-class ResearcherAgentState(TypedDict):
+class EngineerAgentState(TypedDict):
     """
     Represents the state of our graph.
 
@@ -199,11 +211,12 @@ class ResearcherAgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     sender: str
 
-class Researcher(object):
+class Engineer(object):
     """This agent performs research on the design."""
 
-    def __init__(self, model: ChatOpenAI, retriever: Any, language: str = 'verilog'):
+    def __init__(self, model: ChatOpenAI, retriever: Any, language: str = 'verilog', solution_num: int = 0):
 
+        self.solution_num = solution_num
         self.retriever = retriever
         self.model = model
         self.webcleaner = WebsearchCleaner.from_llm(llm=model)
@@ -422,7 +435,13 @@ Queries and results:
             tools=[search_web, python_run], response_format=CodeModuleResponse
             )
 
-        self.workflow = StateGraph(ResearcherAgentState)
+    #### Module Evaluator agent
+        self.module_evaluator_agent = GenericToolCallingAgent(
+            model=model, prompt=module_evaluate_agent_prompt,
+            tools=[], response_format=ModuleEvaluator
+            )
+
+        self.workflow = StateGraph(EngineerAgentState)
 
         # Define the nodes
         self.workflow.add_node("lit_questions", self.lit_questions)
@@ -435,7 +454,8 @@ Queries and results:
         self.workflow.add_node("redesign_solution", self.redesign_solution)
         self.workflow.add_node("hierarchical_evaluation", self.hierarchical_evaluation)
         self.workflow.add_node("modular_design", self.modular_design) 
-        self.workflow.add_node("modular_integrator", self.modular_integrator) 
+        self.workflow.add_node("modular_integrator", self.modular_integrator)
+        self.workflow.add_node("module_evaluator", self.module_evaluator) 
         self.workflow.add_node("search_the_web", self.search_the_web)
 
         # Build graph
@@ -488,8 +508,15 @@ Queries and results:
         )
         self.workflow.add_edge("redesign_solution", "hierarchical_evaluation")
         self.workflow.add_edge("modular_design", "modular_integrator")
-        self.workflow.add_edge("modular_integrator" ,END)
-
+        self.workflow.add_edge("modular_integrator" , "module_evaluator")
+        self.workflow.add_conditional_edges(
+            "module_evaluator",
+            (lambda x: x['keys']['goto']),
+            {
+                "modular":"modular_integrator",
+                "end": END,
+            },
+        )
         # Compile
         self.app = self.workflow.compile()
         
@@ -539,7 +566,15 @@ Queries and results:
         if "result" in state_dict.keys():
             self.lit_search_results_.append("query: " + state_dict['search'])
             self.lit_search_results_.append("results: " + state_dict['result'])
-        current_step = remaining_steps.pop(0)
+        try:
+            current_step = remaining_steps.pop(0)
+        except IndexError:
+            decision = "design"
+            return{
+            "keys": {
+                "decision": decision,
+                }
+            }
         if "report:" in current_step.lower():
             decision = "design"
             message = self.lit_review_agent_prompt_human.format_messages(
@@ -748,7 +783,9 @@ Queries and results:
                 )
         self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
         result = HumanMessage(str(self.hierarchical_solution_result), name="designer")
-        with open('solution.txt', 'w+') as file:
+        if not os.path.exists(f'solution_{self.solution_num}'):
+            os.makedirs(f'solution_{self.solution_num}')
+        with open(f'solution_{self.solution_num}/solution.txt', 'w+') as file:
             file.write(str(self.hierarchical_solution_result))
 
         return{
@@ -860,7 +897,9 @@ Queries and results:
                 )
         self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
         result = HumanMessage(str(self.hierarchical_solution_result), name="redesigner")
-        with open('redesigned_solution.txt', 'w+') as file:
+        if not os.path.exists(f'solution_{self.solution_num}'):
+            os.makedirs(f'solution_{self.solution_num}')
+        with open(f'solution_{self.solution_num}/redesigned_solution.txt', 'w+') as file:
             file.write(str(self.hierarchical_solution_result))
 
         return{
@@ -884,116 +923,204 @@ Queries and results:
         Modules = []
         # The following prompt prepares message for the module design agent
         module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
-            """Write the HLS/HDL code for the following desgin. Note that the design consisting of modules with\
-            input/output and connecting modules already designed for you. Your task is to build the modules in consistent with the modules that you have already built and with the overal desing.\
-            note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
-            Remember to write complete synthesizable module code without placeholders. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
-            The coding language is {language}.
+"""Write the HLS/HDL code for the following desgin. Note that the design consisting of modules with input/output and connecting modules already designed for you. Your task is to build the modules in consistent with the modules that you have already built and with the overal desing.\
+note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
+Remember to write complete synthesizable module code without placeholders. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
+The coding language is {language}.
+Goals:
+{goals}
+    
+Requirements:
+{requirements}
+Literature review, methodology:
+{methodology}
+Literature review, implementation:
+{implementation}
 
-            Goals:
-            {goals}
-                
-            Requirements:
-            {requirements}
+System design:
+{hierarchical_design}
+                                                            
+Modules built so far:
+{modules_built}
 
-            Literature review, methodology:
-            {methodology}
-
-            Literature review, implementation:
-            {implementation}
-            
-            System design:
-            {hierarchical_design}
-                                                                        
-            Modules built so far:
-            {modules_built}
-            
-            Current Module (you are coding this module):
-            {current_module}
-
-            you must always use the CodeModuleResponse tool for your final response.
-            """
+Current Module (you are coding this module):
+{current_module}
+you must always use the CodeModuleResponse tool for your final response.
+"""
             )
         for module in hierarchical_design:
-            response = self.module_design_agent.invoke(
-                {
-                    "messages": module_agent_prompt_human.format_messages(
-                        language=self.language,
-                        goals=self.goals,
-                        requirements=self.requirements,
-                        methodology=self.lit_review_results.methodology,
-                        implementation=self.lit_review_results.implementation,
-                        hierarchical_design=str(hierarchical_design),
-                        modules_built=str(Modules), 
-                        current_module=str(module)
-                        )
-                    }
-                )
+            try:
+                response = self.module_design_agent.invoke(
+                    {
+                        "messages": module_agent_prompt_human.format_messages(
+                            language=self.language,
+                            goals=self.goals,
+                            requirements=self.requirements,
+                            methodology=self.lit_review_results.methodology,
+                            implementation=self.lit_review_results.implementation,
+                            hierarchical_design=str(hierarchical_design),
+                            modules_built=str(Modules), 
+                            current_module=str(module)
+                            )
+                        }
+                    )
+            except:
+                print("Module failed to be built! Trying again.")
+                response = self.module_design_agent.invoke(
+                    {
+                        "messages": module_agent_prompt_human.format_messages(
+                            language=self.language,
+                            goals=self.goals,
+                            requirements=self.requirements,
+                            methodology=self.lit_review_results.methodology,
+                            implementation=self.lit_review_results.implementation,
+                            hierarchical_design=str(hierarchical_design),
+                            modules_built=str(Modules), 
+                            current_module=str(module)
+                            )
+                        }
+                    )
             Modules.append(response)
-            with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
-                f.write(response.module_code)
+
+            #if not os.path.exists(f'solution_{self.solution_num}'):
+            #    os.makedirs(f'solution_{self.solution_num}')
+            #with open(f"solution_{self.solution_num}/{module.name}.{utils.find_extension(self.language)}", "w") as f:
+            #    f.write(response.module_code)
+
         return {"messages" : ['module design stage completed'],
                 'keys' : {'coded_modules': Modules,
                           },
                 }
+
+        
+    def module_evaluator(self, state):
+        print("---Module Evaluator---")
+        state_dict = state["keys"]
+        hierarchical_design = state_dict["coded_modules"]
+        module_evaluator_prompt_human = HumanMessagePromptTemplate.from_template(
+"""Evaluate the HLS/HDL codes for the following modules based on the instruction provided. 
+You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.
+The coding language is {language}.
+Goals:
+{goals}
     
+Requirements:
+{requirements}
+
+Coded Modules (all module codes):
+{coded_modules}
+you must always use the ModuleEvaluator tool for your final response.
+"""
+            )
+        response = self.module_evaluator_agent.invoke(
+            {
+                "messages": module_evaluator_prompt_human.format_messages(
+                    language=self.language,
+                    goals=self.goals,
+                    requirements=self.requirements,
+                    coded_modules='\n\n'.join([module.name + "\n" + module.code for module in hierarchical_design])
+                    )
+                }
+            )
+
+        goto = 'end'
+        if 'na' != response.feedback.lower():
+            goto = 'modular'
+        print(response.feedback)
+        return {"messages" : [f'modules were evaluated'],
+        'keys' : {'goto': goto,
+                  'feedback': response.feedback,
+                  'coded_modules': hierarchical_design,
+                  },
+        }
+
     def modular_integrator(self, state):
         print("---Modular Integration---")
         state_dict = state["keys"]
         hierarchical_design = state_dict['coded_modules']
+        try:
+            feedback = state_dict['feedback']
+        except: 
+            feedback = 'NA'
         Modules = []
         # The following prompt prepares message for the module design agent
         module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
-            """Improve the HLS/HDL code for the following desgin. Note that the design is to some degree codeded for you. Your task is to write the remaining codes of the modules in consistent the modules that you have already built and the overal desing.\
-            note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
-            you should also use various technique to optimize your final code for speed, memory, device compatibility. These techniques include proper usage of device resources as well as code pragmas (if you are coding in HLS C++).
-            Remember to write "complete synthesizable module code" voide of any placeholders or any simplified logic. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
-            The coding language is {language}.
+"""Improve the HLS/HDL code for the following desgin. Note that the design is to some degree codeded for you. Your task is to write the remaining codes of the modules in consistent the modules that you have already built and the overal desing.\
+note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
+you should also use various technique to optimize your final code for speed, memory, device compatibility. These techniques include proper usage of device resources as well as code pragmas (if you are coding in HLS C++).
+Remember to write "complete synthesizable module code" voide of any placeholders or any simplified logic. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
+The coding language is {language}.
+You are also provided with feedback from your previous attempted design (if any).
+Feedback from the evaluator:
+{feedback}
+Goals:
+{goals}
+    
+Requirements:
+{requirements}
+Literature review, methodology:
+{methodology}
+Literature review, implementation:
+{implementation}
 
-            Goals:
-            {goals}
-                
-            Requirements:
-            {requirements}
+System design:
+{hierarchical_design}
+                                                            
+Modules built so far:
+{modules_built}
 
-            Literature review, methodology:
-            {methodology}
-
-            Literature review, implementation:
-            {implementation}
-            
-            System design:
-            {hierarchical_design}
-                                                                        
-            Modules built so far:
-            {modules_built}
-            
-            Current Module (you are coding this module):
-            {current_module}
-
-            you must always use the CodeModuleResponse tool for your final response.
-            """
+Current Module (you are coding this module):
+{current_module}
+you must always use the CodeModuleResponse tool for your final response.
+"""
             )
         for module in hierarchical_design:
-            response = self.module_design_agent.invoke(
-                {
-                    "messages": module_agent_prompt_human.format_messages(
-                        language=self.language,
-                        goals=self.goals,
-                        requirements=self.requirements,
-                        methodology=self.lit_review_results.methodology,
-                        implementation=self.lit_review_results.implementation,
-                        hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
-                        modules_built=str(Modules), 
-                        current_module=str(module)
-                        )
-                    }
-                )
+            try:
+                response = self.module_design_agent.invoke(
+                    {
+                        "messages": module_agent_prompt_human.format_messages(
+                            language=self.language,
+                            goals=self.goals,
+                            feedback=feedback,
+                            requirements=self.requirements,
+                            methodology=self.lit_review_results.methodology,
+                            implementation=self.lit_review_results.implementation,
+                            hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
+                            modules_built=str(Modules), 
+                            current_module=str(module)
+                            )
+                        }
+                    )
+            except:
+                print("Module failed to be rebuilt! Trying again.")
+                response = self.module_design_agent.invoke(
+                    {
+                        "messages": module_agent_prompt_human.format_messages(
+                            language=self.language,
+                            goals=self.goals,
+                            requirements=self.requirements,
+                            methodology=self.lit_review_results.methodology,
+                            implementation=self.lit_review_results.implementation,
+                            hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
+                            modules_built=str(Modules), 
+                            current_module=str(module)
+                            )
+                        }
+                    )
+            #print(f'module {module.name} was designed')
             Modules.append(response)
-            with open(f"{module.name}.{utils.find_extension(self.language)}", "w") as f:
+            
+            if not os.path.exists(f'solution_{self.solution_num}'):
+                os.makedirs(f'solution_{self.solution_num}')
+            with open(f"solution_{self.solution_num}/{module.name}.{utils.find_extension(self.language)}", "w") as f:
                 f.write(response.module_code)
-            with open(f"{module.name}_tb.{utils.find_extension(self.language)}", "w") as f:
+            with open(f"solution_{self.solution_num}/{module.name}_tb.{utils.find_extension(self.language)}", "w") as f:
                 f.write(response.test_bench_code)
+        
+        return {"messages" : [f'module {module.name} was designed'],
+        'keys' : {'coded_modules': Modules,
+                  },
+        }
 
     def invoke(self, goals, requirements, input_context):
         self.requirements = requirements

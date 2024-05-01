@@ -42,6 +42,7 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
     [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HDL hardware project. Your design will be used by a HDL/HLS coder to write the modules.
             Your responsibilities are:
             - Define a top-level module named "Top_module" that contains the rest of the modules.
+            - The design should preferably have a few independent module. You should possibly keep the number of modules as low as possible.
             - Ensure each module has a unique name, a detailed description, defined ports, and clear connections to other modules.
             - Include interface modules where necessary for communication, data transfer, or control. Describe their role in the system and ensure proper connections to other modules.
             - Specify a consistent module hierarchy, ensuring proper data flow and control signals.
@@ -125,9 +126,11 @@ module_design_agent_prompt = ChatPromptTemplate.from_messages(
             - Replacing all placeholders with complete synthesizable code.
             - Writing production-ready code, considering efficiency metrics and performance goals.
             - Do not leave any unwritten part of the code (placeholders or to be designed later) unless absolutely necessary.
+            - Write your code and comment step by step implementation and descriptions of the module.
             - Using necessary libraries and headers for FPGA design.
             - Managing data flow and control signals to ensure proper functionality.
             - Implementing specific logic, if necessary, for communication protocols or hardware interactions.
+            - Remember that these are hardware code (written in either HDL or HLS) and not simple software code.
 
             Your module should:
             - Define ports and interfaces for all required connections.
@@ -152,6 +155,44 @@ final_integrator_agent_prompt = ChatPromptTemplate.from_messages(
 
             Your responsibilities include:
             - Replacing all placeholders with complete synthesizable code.
+            - Replace simplified code with synthesizable code that satisfies the goals and requirements.
+            - Replace any missing or incomplete part of the code with actual synthesizable code and add comments to explain the flow of the code.
+            - Add all the necessary libraries to the code if they are missing.
+            - Optimize the design to achieve the goals and requirements (if writing HLS code, pragmas can help)
+            - Make sure that data formats (and ports) are correct and consistent across modules.
+            - You may receive feedback from your previous attempt at completing the modules. Take that feedback may apply to specific modules or to all of them.
+
+            Note:       
+            - Remember that these are hardware code (written in either HDL or HLS) and not simple software code.
+
+            Use the following format:
+
+            Thought: You should think of ways to achieve synthesizablity, completeness and achieving the goals and requirements.
+            Action: You take an action through calling one of the search_web or python_run tools.
+            ... (this Thought/Action can repeat 3 times)
+            Response: You Must use the CodeModuleResponse tool to format your response. Do not return your final response without using the CodeModuleResponse tool"""),
+            MessagesPlaceholder(variable_name="messages"),
+]
+)
+
+module_evaluate_agent_prompt = ChatPromptTemplate.from_messages(
+    [SystemMessage(content="""You are an FPGA evaluation engineer responsible for evaluating synthesizability, quality and completeness of code for an HDL/HLS hardware project.
+            Your task is to evaluate the module codes based on the criteria provided.
+            Note:       
+            - Remember that these are hardware code (written in either HDL or HLS) and not simple software code.
+
+            Response: You Must use the ModuleEvaluator tool to format your response. Do not return your final response without using the ModuleEvaluator tool"""),
+            MessagesPlaceholder(variable_name="messages"),
+]
+)
+
+final_integrator_agent_prompt2 = ChatPromptTemplate.from_messages(
+    [SystemMessage(content="""You are an FPGA design engineer responsible for writing synthesizable code for an HDL/HLS hardware project. Your task is to complete the code for the following module, ensuring that all placeholders are replaced with complete, production-ready code. You are provided with the whole design architecture in JSON format, which includes the module you are designing at this stage.
+
+            Your responsibilities include:
+            - Replacing all placeholders with complete synthesizable code.
+            - Replace simplified code with synthesizable code that satisfies the goals and requirements.
+            - Write your code and comment step by step implementation and descriptions of the module.
             - Writing production-ready code, considering efficiency metrics and performance goals.
             - Using necessary libraries and headers for FPGA design.
             - Managing data flow and control signals to ensure proper functionality.
