@@ -47,7 +47,7 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
             - Include interface modules where necessary for communication, data transfer, or control. Describe their role in the system and ensure proper connections to other modules.
             - Specify a consistent module hierarchy, ensuring proper data flow and control signals.
             - If a module connects to another, make sure this is reflected in the system design.
-            - If multiple instances of a module are needed, use subscripted names (e.g., Module1, Module2) to indicate different instances.
+            - If multiple instances of a module are needed, do not define it multiple time, instead just mention that multiple instances are needed.
             - If additional information is needed, you can independently perform web searches.
             - If the coding language is one of the verilog, vhdl, system verilog, you must include clock and reset inputs to your modules wherever necessary.
             - If the coding language is HLS C++, you should not include clock signals.
@@ -99,8 +99,8 @@ hierarchical_agent_update_prompt = ChatPromptTemplate.from_messages(
             - Ensure each module has a unique name, a detailed description, defined ports, and clear connections to other modules.
             - Include interface modules where necessary for communication, data transfer, or control. Describe their role in the system and ensure proper connections to other modules.
             - Specify a consistent module hierarchy, ensuring proper data flow and control signals.
+            - If multiple instances of a module are needed, do not define it multiple time, instead just mention that multiple instances are needed.
             - If a module connects to another, make sure this is reflected in the system design.
-            - If multiple instances of a module are needed, use subscripted names (e.g., Module1, Module2) to indicate different instances.
             - If additional information is needed, you can independently perform web searches.
             - If the coding language is one of the verilog, vhdl, system verilog, you must include clock and reset inputs to your modules wherever necessary.
             - If the coding language is HLS C++, you should not include clock signals.
@@ -117,7 +117,7 @@ hierarchical_agent_update_prompt = ChatPromptTemplate.from_messages(
             Response: You should use the HierarchicalResponse tool to format your response. Do not return your final response without using the HierarchicalResponse tool"""),
             MessagesPlaceholder(variable_name="messages"),
 ]
-)
+) # - If multiple instances of a module are needed, use subscripted names (e.g., Module1, Module2) to indicate different instances.
 
 module_design_agent_prompt = ChatPromptTemplate.from_messages(
     [SystemMessage(content="""You are an FPGA design engineer responsible for writing synthesizable code for an HDL/HLS hardware project. Your task is to complete the code for the following module, ensuring that all placeholders are replaced with complete, production-ready code. You are provided with the whole design architecture in JSON format, which includes the module you are designing at this stage.
@@ -164,10 +164,12 @@ final_integrator_agent_prompt = ChatPromptTemplate.from_messages(
 
             Note:       
             - Remember that these are hardware code (written in either HDL or HLS) and not simple software code.
+            - If the coding language is HLS C++, the code must use AMD HLS datatypes and librarries.
+            - everything you do must be through function calls.
 
             Use the following format:
 
-            Thought: You should think of ways to achieve synthesizablity, completeness and achieving the goals and requirements.
+            Thought: You should think of an action. You do this by calling the Thought tool/function. This is the only way to think.
             Action: You take an action through calling one of the search_web or python_run tools.
             ... (this Thought/Action can repeat 3 times)
             Response: You Must use the CodeModuleResponse tool to format your response. Do not return your final response without using the CodeModuleResponse tool"""),
@@ -180,6 +182,7 @@ module_evaluate_agent_prompt = ChatPromptTemplate.from_messages(
             Your task is to evaluate the module codes based on the criteria provided.
             Note:       
             - Remember that these are hardware code (written in either HDL or HLS) and not simple software code.
+            - If the coding language is HLS C++, the code must use AMD HLS datatypes and librarries.
 
             Response: You Must use the ModuleEvaluator tool to format your response. Do not return your final response without using the ModuleEvaluator tool"""),
             MessagesPlaceholder(variable_name="messages"),

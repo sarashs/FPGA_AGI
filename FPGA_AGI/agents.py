@@ -91,6 +91,8 @@ class GenericToolCallingAgent(object):
         functions = [convert_to_openai_function(t) for t in tools]
         functions.append(convert_to_openai_function(response_format))
         self.model = prompt | model.bind_functions(functions)
+        self._failure_count = 0
+        self._max_failurecount = 2
         # Define a new graph
         self.workflow = StateGraph(GenericAgentState)
 
@@ -106,6 +108,7 @@ class GenericToolCallingAgent(object):
             # Next, we pass in the function that will determine which node is called next.
             self.should_continue,
             {
+                "agent": "agent",
                 # If `tools`, then we call the tool node.
                 "continue": "action",
                 # Otherwise we finish.
@@ -130,7 +133,13 @@ class GenericToolCallingAgent(object):
             print("---Error---")
             print(last_message)
             print("The message must be a function call")
-            return "end"
+            if self._failure_count > self._max_failurecount:
+                return 'end'
+            else:
+                print("trying one more time")
+                self._failure_count += 1
+                state["messages"].append(HumanMessage("The message must be a function call. Everything you do must me through a function call", name="Moderator"))
+                return 'agent'
         # Otherwise if there is, we need to check what type of function call it is
         elif last_message.additional_kwargs["function_call"]["name"] == self.response_format.__name__:
             return "end"
@@ -245,7 +254,7 @@ class Engineer(object):
 *   **Use of Technical Terminology with Caution:** While technical terms should be used to enhance query relevance, ensure they are not used to create highly specific questions that are unlikely to be answered by available literature.
 *   **Clear and Structured Format:** Queries should be clear and direct, with each starting with "search:" followed by a practical, result-oriented question. End with a "report:" task to synthesize findings into a comprehensive literature review.
 
-**Only perform one query for each topic:**
+**Only perform one query for each topic for a total of 6 queries:**
 
 1.  **General Overview:** Start with an overview of common specifications and architectures, related to the project goal. avoiding overly specific details related to any single model or board.
 2.  **Existing Solutions and Case Studies:** Investigate a range of implementations and case studies focusing on digital signal processing tasks like FFT on FPGAs, ensuring a variety of platforms are considered.
@@ -1071,7 +1080,7 @@ Modules built so far:
 
 Current Module (you are coding this module):
 {current_module}
-you must always use the CodeModuleResponse tool for your final response.
+you must always use the CodeModuleResponse tool for your final response. Every thing you do is through function calls.
 """
             )
         for module in hierarchical_design:
@@ -1092,12 +1101,13 @@ you must always use the CodeModuleResponse tool for your final response.
                         }
                     )
             except:
-                print("Module failed to be rebuilt! Trying again.")
+                print("Module failed to be built! Trying again.")
                 response = self.module_design_agent.invoke(
                     {
                         "messages": module_agent_prompt_human.format_messages(
                             language=self.language,
                             goals=self.goals,
+                            feedback=feedback,
                             requirements=self.requirements,
                             methodology=self.lit_review_results.methodology,
                             implementation=self.lit_review_results.implementation,
