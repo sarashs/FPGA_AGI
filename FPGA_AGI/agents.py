@@ -1,11 +1,11 @@
 try:
     from FPGA_AGI.tools import search_web, python_run, Thought
-    from FPGA_AGI.prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt, module_evaluate_agent_prompt
+    from FPGA_AGI.prompts import *
     from FPGA_AGI.parameters import RECURSION_LIMIT
     from FPGA_AGI.chains import WebsearchCleaner, Planner, LiteratureReview
     import FPGA_AGI.utils as utils
 except ModuleNotFoundError:
-    from prompts import hierarchical_agent_prompt, module_design_agent_prompt, hierarchical_agent_evaluator, hierarchical_agent_update_prompt, module_evaluate_agent_prompt
+    from prompts import *
     from parameters import RECURSION_LIMIT
     from chains import WebsearchCleaner, Planner, LiteratureReview
     from tools import search_web, python_run, Thought
@@ -26,40 +26,44 @@ from langchain.output_parsers.openai_tools import PydanticToolsParser
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 import os
 
+from langchain_openai import ChatOpenAI
+#accurate_model = ChatOpenAI(model='gpt-4', temperature=0)
+
 class Module(BaseModel):
     """module definition"""
     name: str = Field(description="Name of the module.")
     description: str = Field(description="Module description including detailed explanation of what the module does and how to achieve it. Think of it as a code equivalent of the module without coding it.")
     connections: List[str] = Field(description="List of the modules connecting to this module (be it via input or output).")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    module_template: str = Field(description="Outline of the HDL/HLS code with placeholders and enough comments to be completed by a coder. The outline must include module names and ports. The placeholders must be comments starting with PLACEHOLDER:")
+    module_template: str = Field(description="Outline of the xilinx HLS C++ code with placeholders and enough comments to be completed by a coder. The placeholders must be comments starting with PLACEHOLDER:")
 
-class HierarchicalResponse(BaseModel):
-    """Final response to the user"""
+class SystemDesign(BaseModel):
+    """system design"""
     graph: List[Module] = Field(
         description="""List of modules"""
         )
-
-### System level evaluator
+    
 class SystemEvaluator(BaseModel):
     """system design evaluation"""
-    coding_language: bool = Field(description="Whether the coding language is incorrect.")
-    connections: bool = Field(description="Whether the connections between modules are inconsistent or the input/outputs are connected improperly.")
-    ports: bool = Field(description="Whether the ports and interfaces are defined incorrectly or there are any missing ports")
-    excessive: bool = Field(description="Whether the design has any excessive and/or superflous modules.")
-    missing: bool = Field(description="Whether the design is missing any modules.")
-    template: bool = Field(description="Whether the template code correctly identifies all of the place holders and correctly includes the module ports.")
-    overal: bool = Field(description="Whether the current system is not going to be able to satisfy all of the design goals and most of its requirements.")
-    description: str = Field(description="If any of the above is true, describe which module it is and how it should be corrected, otherwise NA.")
+    coding_language: str = Field(description="NA if coding language is HLS C++ otherwise explain the problem. Note that this is not regular C++ but one that is used by xilinx high level synthesis")
+    functionality: str = Field(description="NA If the design achieves design goals and requirements, otherwise explain.")
+    connections: str = Field(description="NA If the connections between modules are consistent or the input/outputs are connected properly, otherwise explain. THIS IS VERY IMPORTANT")
+    excessive: str = Field(description="NA if the design is free of any excessive and/or superflous modules otherwise explain.")
+    missing: str = Field(description="NA if the design is complete and is not missing any modules otherwise explain. In particular every design must have a module (HLS C++ function) named main which will be the main function in HLS C++.")
+    template: str = Field(description="NA if the template code correctly identifies all of the place holders and correctly includes the module ports otherwise explain.")
+    fail: bool = Field(description="true if the design fails in any of the coding_language, functionality, connections, excessive, missing and template otherwise false.")
 
 ### Module level evaluator
 class ModuleEvaluator(BaseModel):
     """module evaluation"""
-    coding_language: bool = Field(description="Whether the coding language is incorrect.")
-    adherence: bool = Field(description="Whether the code adheres to HDL/HLS language components. In particular, if the language is HLS C++, the code must be in HLS C++ and not just regular C++.")
-    placeholders: bool = Field(description="Whether the code has any placeholders or otherwise missing components from a complete synthesizable code in this module.")
-    optimizations: bool = Field(description="Whether the code is optimized in line with the goals and requirements. For HLS this is achieved via pragmas")
-    feedback: str = Field(description="If any of the above is true, describe what is needed to be done, otherwise NA.")
+    coding_language: str = Field(description="NA if coding language is HLS C++ otherwise explain the problem. Note that this is not regular C++ but one that is used by xilinx high level synthesis")
+    functionality: str = Field(description="NA if the design achieves design goals and requirements, otherwise explain.")
+    connections: str = Field(description="NA if all the necessary connections are made between the modules, otherwise explain. This includes, all the necessary signals coming out or going into the module")
+    interfaces: str = Field(description="NA if all the ports/wires/regs and their types and widths across different modules match, otherwise explain.")
+    syntax: str = Field(description="NA if the code adheres to xilinx HLS c++ language components, otherwise explain.")
+    placeholders: str = Field(description="NA if the code has any placeholders or otherwise missing components from a complete synthesizable code in this module, otherwise explain.")
+    optimizations: str = Field(description="NA if the code is optimized in line with the goals and requirements, otherwise explain. For HLS C++ this is achieved via pragmas.")
+    fail: bool = Field(description="true if the design fails any of the coding_language, functionality, connections, interfaces is false, port_type, syntax, placeholders or optimizations, else false.")
 
 ### Module Design agent
 class CodeModuleResponse(BaseModel):
@@ -68,8 +72,8 @@ class CodeModuleResponse(BaseModel):
     description: str = Field(description="Brief module description.")
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    module_code: str = Field(description="Complete working synthesizable HDL/HLS code without any placeholders.")
-    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the same HDL/HLS language. the testbench module name should be module name underline tb")
+    module_code: str = Field(description="Complete working synthesizable xilinx HLS C++ code without any placeholders.")
+    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the HLS C++ language. the testbench module name should be module name underline tb")
 
 class FinalDesignGraph(BaseModel):
     """Final Design Graph"""
@@ -84,7 +88,7 @@ class GenericToolCallingAgent(object):
     """This agent is a generic tool calling agent. The list of tools, prompt template and resopnse format decides what the agent actually does."""
     def __init__(self, model: ChatOpenAI,
                  prompt: BaseChatPromptTemplate=hierarchical_agent_prompt,
-                 tools: List=[], response_format: BaseModel=HierarchicalResponse):
+                 tools: List=[], response_format: BaseModel=SystemDesign):
         tools.append(Thought)
         self.tool_executor = ToolExecutor(tools)
         self.response_format = response_format
@@ -132,13 +136,12 @@ class GenericToolCallingAgent(object):
         if "function_call" not in last_message.additional_kwargs:
             print("---Error---")
             print(last_message)
-            print("The message must be a function call")
             if self._failure_count > self._max_failurecount:
                 return 'end'
             else:
                 print("trying one more time")
                 self._failure_count += 1
-                state["messages"].append(HumanMessage("The message must be a function call. Everything you do must me through a function call", name="Moderator"))
+                state["messages"].append(HumanMessage("There is an error in your output. Your output must be a function call as explained to you via the system message. Please respond via a function call and do not respond in any other form.", name="Moderator"))
                 return 'agent'
         # Otherwise if there is, we need to check what type of function call it is
         elif last_message.additional_kwargs["function_call"]["name"] == self.response_format.__name__:
@@ -181,8 +184,8 @@ class GenericToolCallingAgent(object):
     def invoke(self, messages):
 
         output = self.app.invoke(messages, {"recursion_limit": RECURSION_LIMIT})
-        print(output)
         out = json.loads(output['messages'][-1].additional_kwargs["function_call"]["arguments"])
+        print(out)
         out = self.response_format.parse_obj(out)
         return out
 
@@ -223,13 +226,14 @@ class EngineerAgentState(TypedDict):
 class Engineer(object):
     """This agent performs research on the design."""
 
-    def __init__(self, model: ChatOpenAI, retriever: Any, language: str = 'verilog', solution_num: int = 0):
+    def __init__(self, model: ChatOpenAI, evaluator_model: ChatOpenAI, retriever: Any, solution_num: int = 0):
 
         self.solution_num = solution_num
         self.retriever = retriever
         self.model = model
+        self.evaluator_model = evaluator_model
         self.webcleaner = WebsearchCleaner.from_llm(llm=model)
-        self.language = language # or "vhdl", "systemverilog", "cpp"
+        self.language = "HLS C++" # or "vhdl", "systemverilog", "cpp"
         self.input_context = None
         self.requirements = None
         self.goals = None
@@ -238,43 +242,6 @@ class Engineer(object):
         self.hierarchical_solution_result = None
 
         #### lit review questions Agent
-
-        # prompt **For each of the following general topics, break them down into at least 3 sub-topics and generate queries for them:**
-        planner_prompt = ChatPromptTemplate.from_messages(
-            [(
-                    "system",
-                    """
-**Objective:** You are programmed as a hardware engineering literature review agent. Your purpose is to autonomously generate a step-by-step list of web search queries that will aid in gathering both comprehensive and relevant information about hardware design, adaptable across various FPGA platforms without being overly specific to any single device.
-
-**Follow these instructions when generating the queries:**
-
-*   **Focus on Practicality and Broad Applicability:** Ensure each search query is practical and likely to result in useful findings. Avoid queries that are too narrow or device-specific which may not yield significant search results.
-*   **Sequential and Thematic Structure:** Organize questions to start from broader concepts and architectures, gradually narrowing down to specific challenges and solutions relevant to a wide range of FPGA platforms.
-*   **Contextually Rich and Insightful Inquiries:** Avoid overly broad or vague topics that do not facilitate actionable insights. The list of questions should involve individual tasks, that if searched on the will yield specific results. Do not add any superfluous questions.
-*   **Use of Technical Terminology with Caution:** While technical terms should be used to enhance query relevance, ensure they are not used to create highly specific questions that are unlikely to be answered by available literature.
-*   **Clear and Structured Format:** Queries should be clear and direct, with each starting with "search:" followed by a practical, result-oriented question. End with a "report:" task to synthesize findings into a comprehensive literature review.
-
-**Only perform one query for each topic for a total of 6 queries:**
-
-1.  **General Overview:** Start with an overview of common specifications and architectures, related to the project goal. avoiding overly specific details related to any single model or board.
-2.  **Existing Solutions and Case Studies:** Investigate a range of implementations and case studies focusing on digital signal processing tasks like FFT on FPGAs, ensuring a variety of platforms are considered.
-3.  **Foundational Theories:** Delve into the theories and methodologies underpinning FPGA applications.
-4.  **Common Technical Challenges:** Identify and explore common technical challenges associated with FPGA implementations, discussing broadly applicable solutions.
-5.  **Optimization and Implementation Techniques:**Identify effective strategies and techniques for optimizing FPGA designs, applicable across different types of hardware.
-6.  **Hardware specific Optimization :** Conclude with effective strategies and techniques for optimizing FPGA designs for the specific hardware (if a specific platform is provided to you).
-
-**Final Task:**
-
-*   **report:** Synthesize all information into a structured and comprehensive literature review that is informative and applicable to hardware designers working with various FPGA platforms.
-
-Example of a Specific Query Formation:
-
-search: "pipelining of risc-v devices."
-"""
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
         # This is the input prompt for when the object is invoked or streamed
         self.planner_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Design the literature review set of questions for the following goals and requirements. Be considerate of the user input context.
                     goals:
@@ -287,36 +254,17 @@ search: "pipelining of risc-v devices."
         self.planner_chain = Planner.from_llm_and_prompt(llm=model, prompt=planner_prompt)
 
         #### literature review Agent
-
-        # prompt
-        lit_review_prompt = ChatPromptTemplate.from_messages(
-            [(
-                    "system",
-                    """
-**Objective:** You are a hardware engineering literature review agent. Your purpose is to generate a literature review based on a set of goals, requirements, user input context and queries and results provided to you. 
-You must write this literature review document as thoroughly as possible.
-
-**Follow these instructions when generating the report:**
-
-*   **Methodology: Completely describe any methods, algorithms and theoretical background of what will be implemented. Just naming or mentioning the method is not sufficient. You need to explain them to the best of your ability. This section is often more than 500 words.** 
-*   **implementation: For this section, you will write about an implementation strategy. You must write detailed description of your chosen implementation strategy and why it is better than other strategies and more aligned with the goals/requirements. Try to base this section on the search results if possibe. This section is often more than 500 words.**
-*   Do not write meaningless or vague sections but rather write a to the point complete technical document. Do not write superfluous statemetns.
-*   Do not write anything about documentation and testing or anything outside of what is needed for a design engineer to write HDL/HLS code.
-"""
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
         # This is the input prompt for when the object is invoked or streamed
-        self.lit_review_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Prepare the literature review for the following list of queries and results given goals, requirements and input context given by the user.
-goals:
-{goals}
-requirements:
-{requirements}
-user input context:
-{input_context}
-Queries and results:
-{queries_and_results}""")
+        self.lit_review_agent_prompt_human = HumanMessagePromptTemplate.from_template("""Prepare the document for the following list of queries and results given goals, requirements and input context given by the user.
+                                                                                        The main component you are using for your wiretup is the queries and results. everything else is provided as context.
+                                                                                        goals:
+                                                                                        {goals}
+                                                                                        requirements:
+                                                                                        {requirements}
+                                                                                        user input context:
+                                                                                        {input_context}
+                                                                                        Queries and results:
+                                                                                        {queries_and_results}""")
 
         self.lit_review_chain = LiteratureReview.from_llm_and_prompt(llm=model, prompt=lit_review_prompt)
 
@@ -338,25 +286,6 @@ Queries and results:
         
         # Parser
         research_parser_tool = PydanticToolsParser(tools=[decision])
-
-        # prompt
-        research_prompt = ChatPromptTemplate.from_messages(
-            [(
-                    "system","""
-                    You are a hardware enigneer whose job is to collect all of the information needed to create a new solution.\
-                    You are collaborating with some assistants. In particular you are following the plans generated by the planner assistant.\
-                    Following the plans provided by the planner and the current step of the plan you come up with what needs to be searched or computed and then making a decision to use 
-                    the search assistant, the compute assisstant or the final solution excerpt generator.\
-                    You ask your questions or perform your computations with the help of the assisstant agents one at a time. You generate an all inclusive search or compute quary based on the current stage of the plan.\
-                    The Plan might get updated throughout the operation by the planner.\
-                    You have access to the following assisstants: \
-                    search assisstant: This assisstant is going to perform document and internet searches.\
-                    compute assisstant: This assisstant is going to generate a python code based on your request, run it and share the results with you.\
-                    solution assisstant: This assisstant is going to generate the final excerpt based on the interaction you had with the other two agents."""
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
         
         # Chain
         self.research_agent = (research_prompt
@@ -396,38 +325,18 @@ Queries and results:
         self.document_grading_agent = document_grading_prompt | document_grading_llm_with_tool | document_grading_parser_tool
 
     #### Compute Agent
-
-        compute_agent_system_prompt = """You are a hardware engineer helping a senior hardware engineer with their computational needs. In order to do that you use python.
-        Work autonomously according to your specialty, using the tools available to you.
-        You must write a code to compute what is asked of you in python to answer the question.
-        Do not answer based on your own knowledge/memory. instead write a python code that computes the answer, run it, and observe the results.
-        You must print the results in your response no matter how long or large they might be. 
-        You must completely print the results. Do not leave any place holders. Do not use ... 
-        Do not ask for clarification. You also do not refuse to answer the question.
-        retrun your response as some explaination of what the response is about plus the actual response.
-        Your other team members (and other teams) will collaborate with you with their own specialties."""
-        compute_agent_prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    compute_agent_system_prompt,
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ]
-        )
         agent_with_tool = create_openai_tools_agent(self.model, [python_run], compute_agent_prompt)
         self.compute_agent = AgentExecutor(agent=agent_with_tool, tools=[python_run], verbose=True)
         
 
     #### Hierarchical Design Agent
-        self.hierarchical_design_agent = GenericToolCallingAgent(model=model, tools=[search_web])
+        self.hierarchical_design_agent = GenericToolCallingAgent(model=model, tools=[])
 
     #### Hierarchical Design Evaluator Agent
         self.hierarchical_design_evaluator_agent = GenericToolCallingAgent(
             response_format=SystemEvaluator,
             prompt=hierarchical_agent_evaluator,
-            model=model,
+            model=evaluator_model, #model,
             tools=[]
             )
 
@@ -446,9 +355,13 @@ Queries and results:
 
     #### Module Evaluator agent
         self.module_evaluator_agent = GenericToolCallingAgent(
-            model=model, prompt=module_evaluate_agent_prompt,
+            model=evaluator_model, prompt=module_evaluate_agent_prompt,
             tools=[], response_format=ModuleEvaluator
             )
+        
+        if "3.5" in model:
+            self.module_design_agent._max_failurecount = 5
+            self.hierarchical_design_agent._max_failurecount = 5
 
         self.workflow = StateGraph(EngineerAgentState)
 
@@ -569,6 +482,17 @@ Queries and results:
             state (dict): New key added to state, documents, that contains retrieved documents
         """
         print("---LITERATURE REVIEW---")
+
+        if (self.lit_review_results):
+            assert self.lit_review_results.methodology
+            assert self.lit_review_results.implementation
+            print("---Literature review already provided. Skipping this step.---")
+            return{
+            "keys": {
+                "decision": "design",
+                }
+            }
+
         messages = state["messages"]
         state_dict = state["keys"]
         remaining_steps = state_dict["remaining_steps"]
@@ -757,8 +681,8 @@ Queries and results:
     def hierarchical_solution(self, state):
         print("---Hierarchical design---")
         #messages = "\n".join([str(item) if item.name in ['compute', 'search'] else '' for item in state["messages"]])
-        input_message = HumanMessage(f"""Design the architecture graph for the following goals, requirements and input context provided by the user. \
-        The language of choice for coding the design is {self.language}.
+        hierarchical_solution_human = HumanMessage(f"""Design the architecture graph for the following goals, requirements and input context provided by the user. \
+        The language of choice for coding the design is Xilinx HLS C++.
         To help you further, you are also provided with literature review performed by another agent.
 
         Goals:
@@ -777,19 +701,19 @@ Queries and results:
         {self.lit_review_results.implementation}
         """, name="researcher"
                                  )
-        try:                         
-            self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
-                {
-                    "messages" : [input_message],
-                    }
-                )
-        except:
-            print("This step failed, trying again.")
-            self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
-                {
-                    "messages" : [input_message],
-                    }
-                )
+        #try:                         
+        self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
+            {
+                "messages" : [hierarchical_solution_human],
+                }
+            )
+        #except:
+        #    print("This step failed, trying again.")
+        #    self.hierarchical_solution_result = self.hierarchical_design_agent.invoke(
+        #        {
+        #            "messages" : [hierarchical_solution_human],
+        #            }
+        #        )
         self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
         result = HumanMessage(str(self.hierarchical_solution_result), name="designer")
         if not os.path.exists(f'solution_{self.solution_num}'):
@@ -806,14 +730,12 @@ Queries and results:
         print("---Hierarchical Design Evaluation---")
         self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
         hierarchical_design = self.hierarchical_solution_result.graph
-        input_message = HumanMessagePromptTemplate.from_template(
+        hierarchical_evaluation_human = HumanMessagePromptTemplate.from_template(
             """
             
             You are provided with the overal design goals and requirements, a literature review, the overal system design and the desired coding language in the following.
             Your job is to assess the system design based on the given information. Be meticulous.
-            
-            Coding language:
-            {language}
+            The design is coded in Xilinx HLS C++.
 
             Goals:
             {goals}
@@ -834,8 +756,7 @@ Queries and results:
                                  
         self.hierarchical_evaluation_result = self.hierarchical_design_evaluator_agent.invoke(
             {
-                "messages" : input_message.format_messages(
-                        language=self.language,
+                "messages" : hierarchical_evaluation_human.format_messages(
                         goals=self.goals,
                         requirements=self.requirements,
                         methodology=self.lit_review_results.methodology,
@@ -852,7 +773,7 @@ Queries and results:
             "messages": [result],
             "sender": "evaluator",
             "keys": {
-                "goto": "modular" if self.hierarchical_evaluation_result.description.lower() == "na" else "redesign",
+                "goto": "redesign" if self.hierarchical_evaluation_result.fail else "modular",
                 "eval_results": self.hierarchical_evaluation_result,
                 },
         }
@@ -863,9 +784,8 @@ Queries and results:
 
         state_dict = state["keys"]
         eval_results = state_dict["eval_results"]
-        input_message = HumanMessage(f"""Improve the architecture graph for the following goals, requirements and input context provided. \
-        You are also provided with the previous design and the evaluator feedback.
-        The language of choice for coding the design is {self.language}.
+        redesign_human = HumanMessage(f"""Improve the architecture graph for the following goals, requirements and input context provided. \
+        You are also provided with the previous design and the evaluator feedback. This design is in Xilinx HLS C++.
         To help you further, you are also provided with literature review performed by another agent.
 
         Goals:
@@ -894,14 +814,14 @@ Queries and results:
         try:                         
             self.hierarchical_solution_result = self.hierarchical_redesign_agent.invoke(
                 {
-                    "messages" : [input_message],
+                    "messages" : [redesign_human],
                     }
                 )
         except:
             print("This step failed, trying again.")
             self.hierarchical_solution_result = self.hierarchical_redesign_agent.invoke(
                 {
-                    "messages" : [input_message],
+                    "messages" : [redesign_human],
                     }
                 )
         self.hierarchical_solution_result.graph.sort(key=lambda x: len(x.connections)) # sort by number of outward connections
@@ -930,39 +850,11 @@ Queries and results:
         state_dict = state["keys"]
         hierarchical_design = self.hierarchical_solution_result.graph
         Modules = []
-        # The following prompt prepares message for the module design agent
-        module_agent_prompt_human = HumanMessagePromptTemplate.from_template(
-"""Write the HLS/HDL code for the following desgin. Note that the design consisting of modules with input/output and connecting modules already designed for you. Your task is to build the modules in consistent with the modules that you have already built and with the overal desing.\
-note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
-Remember to write complete synthesizable module code without placeholders. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
-The coding language is {language}.
-Goals:
-{goals}
-    
-Requirements:
-{requirements}
-Literature review, methodology:
-{methodology}
-Literature review, implementation:
-{implementation}
-
-System design:
-{hierarchical_design}
-                                                            
-Modules built so far:
-{modules_built}
-
-Current Module (you are coding this module):
-{current_module}
-you must always use the CodeModuleResponse tool for your final response.
-"""
-            )
         for module in hierarchical_design:
             try:
                 response = self.module_design_agent.invoke(
                     {
-                        "messages": module_agent_prompt_human.format_messages(
-                            language=self.language,
+                        "messages": modular_design_human_prompt.format_messages(
                             goals=self.goals,
                             requirements=self.requirements,
                             methodology=self.lit_review_results.methodology,
@@ -977,8 +869,7 @@ you must always use the CodeModuleResponse tool for your final response.
                 print("Module failed to be built! Trying again.")
                 response = self.module_design_agent.invoke(
                     {
-                        "messages": module_agent_prompt_human.format_messages(
-                            language=self.language,
+                        "messages": modular_design_human_prompt.format_messages(
                             goals=self.goals,
                             requirements=self.requirements,
                             methodology=self.lit_review_results.methodology,
@@ -1009,7 +900,7 @@ you must always use the CodeModuleResponse tool for your final response.
         module_evaluator_prompt_human = HumanMessagePromptTemplate.from_template(
 """Evaluate the HLS/HDL codes for the following modules based on the instruction provided. 
 You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.
-The coding language is {language}.
+The coding language is Xilinx HLS C++.
 Goals:
 {goals}
     
@@ -1033,12 +924,11 @@ you must always use the ModuleEvaluator tool for your final response.
             )
 
         goto = 'end'
-        if 'na' != response.feedback.lower():
+        if response.fail:
             goto = 'modular'
-        print(response.feedback)
-        return {"messages" : [f'modules were evaluated'],
+        return {"messages" : [response],
         'keys' : {'goto': goto,
-                  'feedback': response.feedback,
+                  'feedback': response,
                   'coded_modules': hierarchical_design,
                   },
         }
@@ -1058,7 +948,7 @@ you must always use the ModuleEvaluator tool for your final response.
 note also that the note section of each module provides you with necessary information, guidelines and other helpful elements to perform your design.
 you should also use various technique to optimize your final code for speed, memory, device compatibility. These techniques include proper usage of device resources as well as code pragmas (if you are coding in HLS C++).
 Remember to write "complete synthesizable module code" voide of any placeholders or any simplified logic. You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.\
-The coding language is {language}.
+The coding language is Xilinx HLS C++.
 You are also provided with feedback from your previous attempted design (if any).
 Feedback from the evaluator:
 {feedback}
@@ -1088,9 +978,8 @@ you must always use the CodeModuleResponse tool for your final response. Every t
                 response = self.module_design_agent.invoke(
                     {
                         "messages": module_agent_prompt_human.format_messages(
-                            language=self.language,
                             goals=self.goals,
-                            feedback=feedback,
+                            feedback=str(feedback),
                             requirements=self.requirements,
                             methodology=self.lit_review_results.methodology,
                             implementation=self.lit_review_results.implementation,
@@ -1105,7 +994,6 @@ you must always use the CodeModuleResponse tool for your final response. Every t
                 response = self.module_design_agent.invoke(
                     {
                         "messages": module_agent_prompt_human.format_messages(
-                            language=self.language,
                             goals=self.goals,
                             feedback=feedback,
                             requirements=self.requirements,

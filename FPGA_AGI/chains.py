@@ -37,7 +37,7 @@ class RequirementChain(Runnable):
 
 # web cleaner chain
 class CleanedWeb(BaseModel):
-    """Project requirements"""
+    """Extracted and cleaned web pages"""
 
     cleaned: str = Field(
         description="Extracted web page after clean-up"
