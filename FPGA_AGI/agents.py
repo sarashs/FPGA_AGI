@@ -72,8 +72,9 @@ class CodeModuleResponse(BaseModel):
     description: str = Field(description="Brief module description.")
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
-    module_code: str = Field(description="Complete working synthesizable xilinx HLS C++ code without any placeholders.")
-    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the HLS C++ language. the testbench module name should be module name underline tb")
+    module_code: str = Field(description="Complete working synthesizable xilinx HLS C++ module code without any placeholders.")
+    header_file: str = Field(description="Complete header file associated with the module code. The top module may not have a header file. In that case returnthis as NA.")
+    test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the HLS C++ language. the testbench module name should be module name underline tb. It must have a main function that returns int.")
 
 class FinalDesignGraph(BaseModel):
     """Final Design Graph"""
@@ -139,8 +140,8 @@ class GenericToolCallingAgent(object):
             if self._failure_count > self._max_failurecount:
                 return 'end'
             else:
-                print("trying one more time")
                 self._failure_count += 1
+                print(f"trying again: {self._failure_count}th out of {self._max_failurecount}")
                 state["messages"].append(HumanMessage("There is an error in your output. Your output must be a function call as explained to you via the system message. Please respond via a function call and do not respond in any other form.", name="Moderator"))
                 return 'agent'
         # Otherwise if there is, we need to check what type of function call it is
@@ -359,9 +360,9 @@ class Engineer(object):
             tools=[], response_format=ModuleEvaluator
             )
         
-        if "3.5" in model:
-            self.module_design_agent._max_failurecount = 5
-            self.hierarchical_design_agent._max_failurecount = 5
+        if "3.5" in model.model_name:
+            self.module_design_agent._max_failurecount = 6
+            self.hierarchical_design_agent._max_failurecount = 6
 
         self.workflow = StateGraph(EngineerAgentState)
 
@@ -851,35 +852,19 @@ class Engineer(object):
         hierarchical_design = self.hierarchical_solution_result.graph
         Modules = []
         for module in hierarchical_design:
-            try:
-                response = self.module_design_agent.invoke(
-                    {
-                        "messages": modular_design_human_prompt.format_messages(
-                            goals=self.goals,
-                            requirements=self.requirements,
-                            methodology=self.lit_review_results.methodology,
-                            implementation=self.lit_review_results.implementation,
-                            hierarchical_design=str(hierarchical_design),
-                            modules_built=str(Modules), 
-                            current_module=str(module)
-                            )
-                        }
-                    )
-            except:
-                print("Module failed to be built! Trying again.")
-                response = self.module_design_agent.invoke(
-                    {
-                        "messages": modular_design_human_prompt.format_messages(
-                            goals=self.goals,
-                            requirements=self.requirements,
-                            methodology=self.lit_review_results.methodology,
-                            implementation=self.lit_review_results.implementation,
-                            hierarchical_design=str(hierarchical_design),
-                            modules_built=str(Modules), 
-                            current_module=str(module)
-                            )
-                        }
-                    )
+            response = self.module_design_agent.invoke(
+                {
+                    "messages": modular_design_human_prompt.format_messages(
+                        goals=self.goals,
+                        requirements=self.requirements,
+                        methodology=self.lit_review_results.methodology,
+                        implementation=self.lit_review_results.implementation,
+                        hierarchical_design=str(hierarchical_design),
+                        modules_built=str(Modules), 
+                        current_module=str(module)
+                        )
+                    }
+                )
             Modules.append(response)
 
             #if not os.path.exists(f'solution_{self.solution_num}'):
@@ -898,7 +883,7 @@ class Engineer(object):
         state_dict = state["keys"]
         hierarchical_design = state_dict["coded_modules"]
         module_evaluator_prompt_human = HumanMessagePromptTemplate.from_template(
-"""Evaluate the HLS/HDL codes for the following modules based on the instruction provided. 
+"""Evaluate the HLS C++ codes for the following modules based on the instruction provided. 
 You are provided with the overal design goals and requirements, a literature review, the overal system design, modules that are coded so far and the module that you will be coding.
 The coding language is Xilinx HLS C++.
 Goals:
@@ -974,42 +959,28 @@ you must always use the CodeModuleResponse tool for your final response. Every t
 """
             )
         for module in hierarchical_design:
-            try:
-                response = self.module_design_agent.invoke(
-                    {
-                        "messages": module_agent_prompt_human.format_messages(
-                            goals=self.goals,
-                            feedback=str(feedback),
-                            requirements=self.requirements,
-                            methodology=self.lit_review_results.methodology,
-                            implementation=self.lit_review_results.implementation,
-                            hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
-                            modules_built=str(Modules), 
-                            current_module=str(module)
-                            )
-                        }
-                    )
-            except:
-                print("Module failed to be built! Trying again.")
-                response = self.module_design_agent.invoke(
-                    {
-                        "messages": module_agent_prompt_human.format_messages(
-                            goals=self.goals,
-                            feedback=feedback,
-                            requirements=self.requirements,
-                            methodology=self.lit_review_results.methodology,
-                            implementation=self.lit_review_results.implementation,
-                            hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
-                            modules_built=str(Modules), 
-                            current_module=str(module)
-                            )
-                        }
-                    )
+            response = self.module_design_agent.invoke(
+                {
+                    "messages": module_agent_prompt_human.format_messages(
+                        goals=self.goals,
+                        feedback=str(feedback),
+                        requirements=self.requirements,
+                        methodology=self.lit_review_results.methodology,
+                        implementation=self.lit_review_results.implementation,
+                        hierarchical_design="\n".join([str(item) for item in hierarchical_design]),
+                        modules_built=str(Modules), 
+                        current_module=str(module)
+                        )
+                    }
+                )
             #print(f'module {module.name} was designed')
             Modules.append(response)
             
             if not os.path.exists(f'solution_{self.solution_num}'):
                 os.makedirs(f'solution_{self.solution_num}')
+            if response.header_file != "NA":
+                with open(f"solution_{self.solution_num}/{module.name}.h", "w") as f:
+                    f.write(response.header_file)               
             with open(f"solution_{self.solution_num}/{module.name}.{utils.find_extension(self.language)}", "w") as f:
                 f.write(response.module_code)
             with open(f"solution_{self.solution_num}/{module.name}_tb.{utils.find_extension(self.language)}", "w") as f:

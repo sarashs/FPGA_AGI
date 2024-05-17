@@ -136,7 +136,7 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
     [SystemMessage(content="""You are an FPGA design engineer whose purpose is to design the architecture graph of a HLS C++ hardware project. Your design will be used by a HLS coder to write the modules.
             Your responsibilities are:
             - The design should preferably have a few independent module. You should possibly keep the number of modules as low as possible.
-            - Each module is a xilinx hls c++ function.
+            - Each module is a xilinx hls c++ function with its corresponding header file (.h file).
             - Ensure each module has a unique name, a detailed description, defined ports, and clear connections to other modules.
             - Module names should follow the C++ function naming convention (modules are basically C++ functions).
             - Include interface modules where necessary for communication, data transfer, or control. Describe their role in the system and ensure proper connections to other modules.
@@ -149,7 +149,7 @@ hierarchical_agent_prompt = ChatPromptTemplate.from_messages(
             - If module A's output is connected to module B's input, then module A is connected to B.
             - If any extra information is needed, you are provided with a web search tool which you can use to improve your knowledge.
             - You should not include clock signals.
-            - Your design must always include a main module which must be named "main" (main c++ function) which acts as a wrapper for submodules in HLS C++.
+            - Your design must always include a top module which acts as a wrapper for submodules and header files in HLS C++. The top module.
             - You should not generate any text without calling a tool.
 
             Use the following format:
@@ -181,7 +181,7 @@ hierarchical_agent_evaluator = ChatPromptTemplate.from_messages(
                 - No test bench modules should be designed. Test benches are designed separately. This design is for the actual architecture of the hardware/code.
             ** Missing:
                 - The design is not missing any necessary modules to satisfy the requirements and goals.
-                - The design must always have a main module that is essentially the C++ main function. This module (C++ function) must be named "main". Any other name is not acceptable.
+                - The design must always have a top module that is essentially the C++ function that returns void.
             ** Template:
                 - Modules are not expected to have complete codes at this stage. They should instead to include placeholders for implementations that will come later.
                 - The template code correctly identifies all of the place holders and correctly includes the module ports.
@@ -286,7 +286,7 @@ final_integrator_agent_prompt = ChatPromptTemplate.from_messages(
             - Replacing all placeholders with complete synthesizable code.
             - Replace simplified code with synthesizable code that satisfies the goals and requirements.
             - Replace any missing or incomplete part of the code with actual synthesizable code and add comments to explain the flow of the code.
-            - Add all the necessary libraries to the code if they are missing.
+            - Add all the necessary libraries and .h files to the code if they are missing.
             - Optimize the design to achieve the goals and requirements.
             - Make sure that data formats (and ports) are correct and consistent across modules.
             - You may receive feedback from your previous attempt at completing the modules. That feedback may apply to specific modules or to all of them.
