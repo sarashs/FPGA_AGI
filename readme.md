@@ -1,4 +1,4 @@
-# SynthAI: A ReAct-CoT-RAG Framework for Automated Modular HDL/HLS Design Generation
+# SynthAI: A ReAct-CoT-RAG Framework for Automated Modular HLS Design Generation
 
 This tool leverages the capabilities of OpenAI's GPT model to automate hardware design based on user prompts. It's an easy-to-use tool that requires minimal inputs from the user.
 
