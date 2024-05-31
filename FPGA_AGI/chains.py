@@ -12,15 +12,17 @@ class Requirements(BaseModel):
     """Project requirements"""
 
     goals: List[str] = Field(
-        description="List of goals based on the project's objectives"
+        description="List of goals based on the project's objectives",
+        default= "NA"
     )
 
     requirements: List[str] = Field(
-        description="List of requirements including all technical specifications and instructions provided"
+        description="List of requirements including all technical specifications and instructions provided",
+        default= "NA"
     )
 
     lang: str = Field(
-        description="HDL/HLS language to be used"
+        description="HDL/HLS language to be used", default="HLS C++"
     )
 
 #requirement_runnable = create_structured_output_runnable(

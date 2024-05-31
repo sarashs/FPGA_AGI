@@ -73,7 +73,7 @@ class CodeModuleResponse(BaseModel):
     connections: List[str] = Field(description="List of the modules connecting to this module.")
     ports: List[str] = Field(description="List of input output ports inlcuding clocks, reset etc.")
     module_code: str = Field(description="Complete working synthesizable xilinx HLS C++ module code without any placeholders.")
-    header_file: str = Field(description="Complete header file associated with the module code. The top module may not have a header file. In that case returnthis as NA.")
+    header_file: str = Field(description="Complete header file associated with the module code. Every module must have a header file in order to be included in the top module.")
     test_bench_code: str = Field(description="Complete behavioral test for the module must be written in the HLS C++ language. the testbench module name should be module name underline tb. It must have a main function that returns int.")
 
 class FinalDesignGraph(BaseModel):
