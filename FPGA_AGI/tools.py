@@ -3,23 +3,22 @@ import requests
 from bs4 import BeautifulSoup
 from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_community.utilities import SerpAPIWrapper
+#from langchain_community.utilities import SerpAPIWrapper
 from contextlib import redirect_stdout
 from typing import Annotated
 from FPGA_AGI.utils import extract_codes_from_string
 from serpapi import GoogleSearch
 import os
-from FPGA_AGI.parameters import MAX_WEBSEARCH_RESULTS, SERPAPI_PARAMS
+from FPGA_AGI.parameters import MAX_WEBSEARCH_RESULTS#, SERPAPI_PARAMS
 
 
 
 ### SerpAPI websearch tool
 
 #search = SerpAPIWrapper()
-
+"""
 @tool
 def search_web(keywords: Annotated[str, "The keywords you want to search on the web"]) -> list:
-    """A web search tool."""
     SERPAPI_PARAMS["q"] = keywords
     search = GoogleSearch(SERPAPI_PARAMS)
     ret = search.get_dict()
@@ -53,7 +52,7 @@ def search_web(keywords: Annotated[str, "The keywords you want to search on the 
         if len(docs) == MAX_WEBSEARCH_RESULTS:
             return docs
     return docs
-
+"""
 search_web = TavilySearchResults()
 
 ### Python run tool
